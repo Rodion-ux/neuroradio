@@ -151,7 +151,7 @@ export default function Home() {
 
   const t = (key: TranslationKey) => translations[key][lang];
   const format = (key: TranslationKey, params: Record<string, string>) => {
-    let text = t(key);
+    let text: string = t(key);
     Object.entries(params).forEach(([param, value]) => {
       text = text.replace(`{${param}}`, value);
     });
