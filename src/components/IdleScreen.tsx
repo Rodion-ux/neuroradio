@@ -39,7 +39,7 @@ export function IdleScreen({ onStart, labels, lang, onSetLang }: IdleScreenProps
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
     const trimmed = activity.trim();
-    onStart(trimmed.length > 0 ? trimmed : "IDLE");
+    onStart(trimmed);
   };
 
   return (
