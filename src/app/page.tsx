@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { IdleScreen } from "../components/IdleScreen";
 import { LoadingScreen } from "../components/LoadingScreen";
 import { PlayerScreen } from "../components/PlayerScreen";
-import { getStationByVibe } from "../lib/radio-engine";
+import { processTextInput } from "../lib/radio-engine";
 
 type ScreenState = "idle" | "loading" | "playing";
 type PlaybackState = "idle" | "playing" | "paused" | "blocked";
@@ -199,7 +199,11 @@ export default function Home() {
   const handleStart = async (userActivity: string, tagOverride?: string) => {
     const sessionId = sessionRef.current + 1;
     sessionRef.current = sessionId;
-    const initialTag = tagOverride ? tagOverride : getStationByVibe(userActivity);
+    const isQuickTag = Boolean(tagOverride);
+    const processed = isQuickTag
+      ? null
+      : processTextInput(userActivity);
+    const initialTag = isQuickTag ? tagOverride : processed?.tag ?? "lofi";
     setStationTag(initialTag.toUpperCase());
     setActiveTag(initialTag);
     setScreen("loading");
@@ -210,7 +214,18 @@ export default function Home() {
     setTrackTitle(null);
     setPlaybackState("idle");
     setStatusText("TUNING...");
-    setStatusDetail(`Searching for ${initialTag}...`);
+    if (isQuickTag) {
+      setStatusDetail(`Searching for ${initialTag}...`);
+    } else if (processed) {
+      setStatusDetail(
+        `VIBE: ${processed.category} | FREQUENCY: ${processed.genre}`
+      );
+      console.log(
+        `User Input: ${userActivity}, Matched Vibe: ${processed.category}, Selected Genre: ${processed.genre}`
+      );
+    } else {
+      setStatusDetail("VIBE: DIRECT | FREQUENCY: lofi");
+    }
     failedCountRef.current = 0;
     activeStationUrlRef.current = null;
 
@@ -244,7 +259,9 @@ export default function Home() {
       stationsRef.current = stationList;
       await startStationPlayback(secureIndex);
       if (sessionId === sessionRef.current) {
-        setStatusDetail("Signal Locked!");
+        if (isQuickTag) {
+          setStatusDetail("Signal Locked!");
+        }
         setScreen("playing");
       }
     } catch (error) {

@@ -1,109 +1,121 @@
-type VibeRule = {
+type VibeCategory = {
   keywords: string[];
-  tags: string[];
+  genres: string[];
 };
 
-const VIBE_RULES: VibeRule[] = [
-  {
+const VIBE_MAP: Record<string, VibeCategory> = {
+  STUDY: {
     keywords: [
-      "work",
-      "coding",
-      "code",
-      "study",
-      "focus",
-      "office",
-      "design",
-      "работ",
-      "код",
-      "программ",
-      "учеб",
-      "учёб",
       "учусь",
-      "проект",
+      "экзамен",
+      "отчет",
+      "диплом",
+      "дедлайн",
+      "концентрация",
+      "study",
+      "exam",
     ],
-    tags: ["lofi", "ambient", "focus"],
+    genres: ["ambient", "lofi", "focus", "classical"],
   },
-  {
-    keywords: ["game", "gaming", "retro", "arcade", "dendy", "денди", "игр", "ретро"],
-    tags: ["chiptune", "8-bit", "retrogame"],
-  },
-  {
+  WORK: {
     keywords: [
-      "energy",
-      "drive",
-      "electro",
-      "sport",
-      "workout",
-      "run",
-      "gym",
-      "энерг",
-      "драйв",
+      "работа",
+      "офис",
+      "звонок",
+      "почта",
+      "задачи",
+      "созвон",
+      "work",
+      "office",
+    ],
+    genres: ["lounge", "deep house", "jazzhop", "downtempo"],
+  },
+  CHORES: {
+    keywords: [
+      "уборка",
+      "готовлю",
+      "душ",
+      "дела",
+      "дома",
+      "быт",
+      "cleaning",
+      "cooking",
+    ],
+    genres: ["funk", "disco", "pop", "electro house"],
+  },
+  SPORT: {
+    keywords: [
+      "зал",
+      "качаюсь",
+      "бег",
+      "тренировка",
+      "фитнес",
       "спорт",
-      "трен",
+      "gym",
+      "workout",
     ],
-    tags: ["techno", "synthwave", "electro"],
+    genres: ["phonk", "techno", "drum and bass", "hardstyle"],
   },
-  {
+  GAMING: {
     keywords: [
-      "rest",
-      "sleep",
-      "chill",
-      "relax",
-      "relaxing",
-      "calm",
-      "отдых",
-      "сон",
-      "чилл",
+      "играю",
+      "катка",
+      "стрим",
+      "квест",
+      "гейминг",
+      "win",
+      "game",
+      "play",
     ],
-    tags: ["chillout", "downtempo", "jazz"],
+    genres: ["chiptune", "8-bit", "future bass", "synth-pop"],
   },
-];
-
-const DIRECT_TAGS: Record<string, string> = {
-  "lofi": "lofi",
-  "lo-fi": "lofi",
-  "chiptune": "chiptune",
-  "synthwave": "synthwave",
-  "ambient": "ambient",
-  "techno": "techno",
-  "retro game": "retrogame",
-  "retrogame": "retrogame",
-  "jazz": "jazz",
-  "piano": "piano",
-  "hip-hop": "hiphop",
-  "hip hop": "hiphop",
-  "hiphop": "hiphop",
-  "dnb": "dnb",
-  "8-bit": "8-bit",
-  "8 bit": "8-bit",
+  TRANSIT: {
+    keywords: ["еду", "машина", "метро", "прогулка", "дорога", "night", "drive", "car"],
+    genres: ["synthwave", "retrowave", "dark wave", "vaporwave"],
+  },
+  RELAX: {
+    keywords: ["отдых", "вечер", "устал", "лежу", "ванна", "чилл", "relax", "chill"],
+    genres: ["soul", "smooth jazz", "bossa nova", "chillout"],
+  },
+  ZEN: {
+    keywords: ["сон", "медитация", "тишина", "грущу", "засыпаю", "sleep", "zen"],
+    genres: ["dark ambient", "drone", "sleep", "nature"],
+  },
 };
 
-const normalizeTag = (value: string) =>
+const normalizeInput = (value: string) =>
   value
     .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, "")
+    .replace(/[^\p{L}\p{N}\s-]/gu, "")
     .replace(/\s+/g, " ")
     .trim();
 
-export const getStationByVibe = (userInput: string) => {
-  const normalized = normalizeTag(userInput);
-  if (!normalized) return "lofi";
+const pickRandom = (items: string[]) =>
+  items[Math.floor(Math.random() * items.length)];
 
-  if (DIRECT_TAGS[normalized]) {
-    return DIRECT_TAGS[normalized];
-  }
+export const processTextInput = (input: string) => {
+  const normalized = normalizeInput(input);
+  const words = normalized.split(" ").filter(Boolean);
 
-  for (const rule of VIBE_RULES) {
-    if (rule.keywords.some((keyword) => normalized.includes(keyword))) {
-      const choice = rule.tags[Math.floor(Math.random() * rule.tags.length)];
-      return choice;
+  for (const [category, config] of Object.entries(VIBE_MAP)) {
+    if (config.keywords.some((keyword) => normalized.includes(keyword))) {
+      const genre = pickRandom(config.genres);
+      return {
+        category,
+        genre,
+        tag: genre,
+      };
     }
   }
 
-  return normalized;
-};
+  const fallback = words.reduce(
+    (longest, word) => (word.length > longest.length ? word : longest),
+    ""
+  );
 
-export const sanitizeTag = (value: string) => {
-  const normalized = normalizeTag(value);
-  return DIRECT_TAGS[normalized] ?? normalized;
+  return {
+    category: "DIRECT",
+    genre: fallback || "lofi",
+    tag: fallback || "lofi",
+  };
 };
