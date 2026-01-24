@@ -2,8 +2,21 @@
 
 import { useState, FormEvent } from "react";
 
+type IdleScreenLabels = {
+  tagLine: string;
+  title: string;
+  subtitle: string;
+  inputLabel: string;
+  placeholder: string;
+  startButton: string;
+  quickVibes: string;
+};
+
 type IdleScreenProps = {
   onStart: (activity: string, tagOverride?: string) => void;
+  labels: IdleScreenLabels;
+  lang: "RU" | "EN";
+  onSetLang: (lang: "RU" | "EN") => void;
 };
 
 const quickTags = [
@@ -19,7 +32,7 @@ const quickTags = [
   "DNB",
 ];
 
-export function IdleScreen({ onStart }: IdleScreenProps) {
+export function IdleScreen({ onStart, labels, lang, onSetLang }: IdleScreenProps) {
   const [activity, setActivity] = useState("");
 
   const handleSubmit = (e: FormEvent) => {
@@ -35,15 +48,32 @@ export function IdleScreen({ onStart }: IdleScreenProps) {
           <div className="absolute left-6 top-6 h-3 w-16 bg-neon/40 shadow-[0_0_12px_rgba(255,119,168,0.7)]" />
           <div className="absolute right-6 top-6 h-3 w-10 bg-neon/40 shadow-[0_0_12px_rgba(255,119,168,0.7)]" />
 
+          <div className="absolute right-4 top-4 z-10 flex overflow-hidden rounded border-2 border-neon bg-[#2a182a] text-[7px] uppercase tracking-[0.3em] text-neon sm:text-[8px]">
+            <button
+              type="button"
+              onClick={() => onSetLang("RU")}
+              className={`px-2 py-1 ${lang === "RU" ? "bg-neon text-[#2d1b2e]" : ""}`}
+            >
+              RU
+            </button>
+            <button
+              type="button"
+              onClick={() => onSetLang("EN")}
+              className={`px-2 py-1 ${lang === "EN" ? "bg-neon text-[#2d1b2e]" : ""}`}
+            >
+              EN
+            </button>
+          </div>
+
           <header className="flex w-full flex-col items-center gap-3">
             <p className="text-[10px] tracking-[0.5em] text-neon/70 sm:text-xs">
-              AI GENERATED VIBES
+              {labels.tagLine}
             </p>
             <h1 className="title-3d glow-pulse text-2xl text-neon-bright sm:text-4xl">
-              NEURO RADIO
+              {labels.title}
             </h1>
             <p className="text-[10px] tracking-[0.3em] text-neon/70 sm:text-xs">
-              IT GOES LIKE
+              {labels.subtitle}
             </p>
           </header>
 
@@ -55,7 +85,7 @@ export function IdleScreen({ onStart }: IdleScreenProps) {
               htmlFor="activity"
               className="text-[10px] uppercase tracking-[0.35em] text-neon/80 sm:text-xs"
             >
-              WHAT ARE YOU DOING?
+              {labels.inputLabel}
             </label>
 
             <input
@@ -63,6 +93,7 @@ export function IdleScreen({ onStart }: IdleScreenProps) {
               type="text"
               value={activity}
               onChange={(e) => setActivity(e.target.value)}
+              placeholder={labels.placeholder}
               className="pixel-input w-full rounded-none border-2 border-neon bg-[#2a182a] px-4 py-4 text-[10px] uppercase tracking-[0.25em] text-neon outline-none transition focus:border-neon-bright focus:ring-2 focus:ring-neon-bright sm:text-xs"
               autoComplete="off"
             />
@@ -71,13 +102,13 @@ export function IdleScreen({ onStart }: IdleScreenProps) {
               type="submit"
               className="pixel-button mt-2 w-full max-w-[240px] border-2 border-neon bg-[#2a182a] px-4 py-3 text-[10px] uppercase tracking-[0.35em] text-neon transition hover:bg-neon hover:text-[#2d1b2e] sm:px-6 sm:py-4 sm:text-xs"
             >
-              START STATION
+              {labels.startButton}
             </button>
           </form>
 
           <div className="mt-2 flex w-full max-w-2xl flex-col gap-4">
             <p className="text-[10px] uppercase tracking-[0.35em] text-neon/80 sm:text-xs">
-              QUICK VIBES:
+              {labels.quickVibes}
             </p>
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
               {quickTags.map((tag) => (

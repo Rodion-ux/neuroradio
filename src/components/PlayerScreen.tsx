@@ -13,6 +13,15 @@ type PlayerScreenProps = {
   isPlaying: boolean;
   statusText?: string;
   statusDetail?: string;
+  visualizerLevels?: number[];
+  labels: {
+    nowPlaying: string;
+    genre: string;
+    liveStream: string;
+    stop: string;
+  };
+  lang: "RU" | "EN";
+  onSetLang: (lang: "RU" | "EN") => void;
 };
 
 const bars = Array.from({ length: 16 });
@@ -28,6 +37,10 @@ export function PlayerScreen({
   isPlaying,
   statusText,
   statusDetail,
+  visualizerLevels,
+  labels,
+  lang,
+  onSetLang,
 }: PlayerScreenProps) {
   const primaryTitle = (stationName || "SEARCHING...").toUpperCase();
   const shouldMarquee = primaryTitle.length > 18;
@@ -43,6 +56,23 @@ export function PlayerScreen({
         <div className="crt-screen crt-text crt-life relative flex flex-col items-center gap-10 px-6 py-10 text-center text-neon sm:px-12">
           <div className="absolute left-6 top-6 h-3 w-16 bg-neon/40 shadow-[0_0_12px_rgba(255,119,168,0.7)]" />
           <div className="absolute right-6 top-6 h-3 w-10 bg-neon/40 shadow-[0_0_12px_rgba(255,119,168,0.7)]" />
+          <div className="absolute right-4 top-4 z-10 flex overflow-hidden rounded border-2 border-neon bg-[#2a182a] text-[7px] uppercase tracking-[0.3em] text-neon sm:text-[8px]">
+            <button
+              type="button"
+              onClick={() => onSetLang("RU")}
+              className={`px-2 py-1 ${lang === "RU" ? "bg-neon text-[#2d1b2e]" : ""}`}
+            >
+              RU
+            </button>
+            <button
+              type="button"
+              onClick={() => onSetLang("EN")}
+              className={`px-2 py-1 ${lang === "EN" ? "bg-neon text-[#2d1b2e]" : ""}`}
+            >
+              EN
+            </button>
+          </div>
+
           <div
             className={`pointer-events-none absolute left-6 top-6 text-[10px] sm:text-xs ${
               isPlaying ? "neon-title" : "text-neon/70"
@@ -53,7 +83,7 @@ export function PlayerScreen({
 
           <div className="mt-6 flex w-full max-w-3xl flex-col items-center gap-8">
             <p className="text-[10px] uppercase tracking-[0.35em] text-neon/80 sm:text-xs">
-              NOW PLAYING:
+              {labels.nowPlaying}
             </p>
             <div className={shouldMarquee ? "marquee" : ""}>
               <p
@@ -70,7 +100,7 @@ export function PlayerScreen({
               </p>
             </div>
             <p className="text-[8px] uppercase tracking-[0.3em] text-neon/70 sm:text-[10px]">
-              GENRE: {tagLabel}
+              {labels.genre}: {tagLabel}
             </p>
 
             <div className="mt-2 flex w-full items-center justify-center">
@@ -91,6 +121,9 @@ export function PlayerScreen({
                     <div
                       key={i}
                       className={`h-full w-[6%] origin-bottom bg-neon-bright visualizer-bar visualizer-bar-${i}`}
+                      style={{
+                        transform: `scaleY(${visualizerLevels?.[i] ?? 0.35})`,
+                      }}
                     />
                   ))}
                 </div>
@@ -143,7 +176,7 @@ export function PlayerScreen({
               <div className="pixel-button flex h-11 items-center gap-2 border-2 border-neon bg-[#2a182a] px-3 text-[8px] text-neon sm:h-12 sm:px-4 sm:text-[10px]">
                 <span className="flex items-center gap-2">
                   <span className="h-2 w-2 animate-pulse rounded-full bg-neon-bright" />
-                  LIVE STREAM
+                  {labels.liveStream}
                 </span>
               </div>
             </div>
@@ -173,7 +206,7 @@ export function PlayerScreen({
               onClick={onStop}
               className="pixel-button mt-4 w-full max-w-[180px] border-2 border-neon bg-[#2a182a] px-4 py-3 text-[10px] uppercase tracking-[0.35em] text-neon transition hover:bg-neon hover:text-[#2d1b2e] sm:px-6 sm:py-4 sm:text-xs"
             >
-              STOP
+              {labels.stop}
             </button>
 
             {statusText && (

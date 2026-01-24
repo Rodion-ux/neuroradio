@@ -8,6 +8,7 @@ import { processTextInput } from "../lib/radio-engine";
 
 type ScreenState = "idle" | "loading" | "playing";
 type PlaybackState = "idle" | "playing" | "paused" | "blocked";
+type Lang = "RU" | "EN";
 
 type Station = {
   id: string;
@@ -18,7 +19,109 @@ type Station = {
   country?: string;
 };
 
+const translations = {
+  placeholder: {
+    RU: "ЧТО ТЫ СЕЙЧАС ДЕЛАЕШЬ?",
+    EN: "WHAT ARE YOU DOING?",
+  },
+  inputLabel: {
+    RU: "ЧТО ТЫ СЕЙЧАС ДЕЛАЕШЬ?",
+    EN: "WHAT ARE YOU DOING?",
+  },
+  statusIdle: {
+    RU: "ОЖИДАНИЕ",
+    EN: "IDLE",
+  },
+  statusTuning: {
+    RU: "НАСТРОЙКА ВОЛНЫ...",
+    EN: "TUNING FREQUENCY...",
+  },
+  statusPlaying: {
+    RU: "ИГРАЕТ",
+    EN: "PLAYING",
+  },
+  statusSignalLost: {
+    RU: "СИГНАЛ ПОТЕРЯН — ПОВТОР...",
+    EN: "SIGNAL LOST - RETRYING...",
+  },
+  statusNoStations: {
+    RU: "НЕТ ДОСТУПНЫХ СТАНЦИЙ",
+    EN: "NO LIVE STATIONS RESPONDING",
+  },
+  statusAudioBlocked: {
+    RU: "АУДИО ЗАБЛОКИРОВАНО — НАЖМИ PLAY",
+    EN: "AUDIO BLOCKED — PRESS PLAY",
+  },
+  statusSearchingFor: {
+    RU: "ИЩУ: {tag}...",
+    EN: "SEARCHING FOR {tag}...",
+  },
+  statusSignalLocked: {
+    RU: "СИГНАЛ ЗАФИКСИРОВАН!",
+    EN: "SIGNAL LOCKED!",
+  },
+  vibeDetail: {
+    RU: "ВАЙБ: {category} | ЧАСТОТА: {genre}",
+    EN: "VIBE: {category} | FREQUENCY: {genre}",
+  },
+  scanningAirwaves: {
+    RU: "СКАНИРУЮ ЭФИР: {tag}....",
+    EN: "SCANNING AIRWAVES: {tag}....",
+  },
+  searching: {
+    RU: "ПОИСК...",
+    EN: "SEARCHING...",
+  },
+  unknownStation: {
+    RU: "НЕИЗВЕСТНАЯ СТАНЦИЯ",
+    EN: "UNKNOWN STATION",
+  },
+  tagLine: {
+    RU: "AI ГЕНЕРИРУЕТ ВАЙБЫ",
+    EN: "AI GENERATED VIBES",
+  },
+  title: {
+    RU: "NEURO RADIO",
+    EN: "NEURO RADIO",
+  },
+  subtitle: {
+    RU: "ТАКОЙ ВАЙБ",
+    EN: "IT GOES LIKE",
+  },
+  startButton: {
+    RU: "ЗАПУСТИТЬ СТАНЦИЮ",
+    EN: "START STATION",
+  },
+  quickVibes: {
+    RU: "БЫСТРЫЕ ВАЙБЫ:",
+    EN: "QUICK VIBES:",
+  },
+  nowPlaying: {
+    RU: "СЕЙЧАС ИГРАЕТ:",
+    EN: "NOW PLAYING:",
+  },
+  genre: {
+    RU: "ЖАНР",
+    EN: "GENRE",
+  },
+  liveStream: {
+    RU: "ПРЯМОЙ ЭФИР",
+    EN: "LIVE STREAM",
+  },
+  stopButton: {
+    RU: "СТОП",
+    EN: "STOP",
+  },
+  cancel: {
+    RU: "ОТМЕНА",
+    EN: "CANCEL",
+  },
+} as const;
+
+type TranslationKey = keyof typeof translations;
+
 export default function Home() {
+  const [lang, setLang] = useState<Lang>("RU");
   const [screen, setScreen] = useState<ScreenState>("idle");
   const [isConnecting, setIsConnecting] = useState(false);
   const [connectionProgress, setConnectionProgress] = useState(0);
@@ -31,6 +134,9 @@ export default function Home() {
   const [playbackState, setPlaybackState] = useState<PlaybackState>("idle");
   const [statusText, setStatusText] = useState<string | undefined>(undefined);
   const [statusDetail, setStatusDetail] = useState<string | undefined>(undefined);
+  const [visualizerLevels, setVisualizerLevels] = useState<number[]>(
+    Array.from({ length: 16 }, () => 0.35)
+  );
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audioReadyRef = useRef(false);
   const sessionRef = useRef(0);
@@ -40,6 +146,21 @@ export default function Home() {
   const activeTagRef = useRef("lofi");
   const isSwitchingRef = useRef(false);
   const activeStationUrlRef = useRef<string | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const sourceRef = useRef<MediaElementAudioSourceNode | null>(null);
+  const animationFrameRef = useRef<number | null>(null);
+
+  const t = (key: TranslationKey) => translations[key][lang];
+  const format = (key: TranslationKey, params: Record<string, string>) => {
+    let text = t(key);
+    Object.entries(params).forEach(([param, value]) => {
+      text = text.replace(`{${param}}`, value);
+    });
+    return text;
+  };
+
+  const setLangValue = (value: Lang) => setLang(value);
 
   useEffect(() => {
     stationsRef.current = stations;
@@ -70,7 +191,7 @@ export default function Home() {
     if (!list.length) return;
     isSwitchingRef.current = true;
     failedCountRef.current += 1;
-    setStatusText("SIGNAL LOST - RETRYING...");
+    setStatusText(t("statusSignalLost"));
     if (reason) {
       setStatusDetail(reason);
     }
@@ -81,7 +202,7 @@ export default function Home() {
           activeTagRef.current ?? "lofi"
         );
         if (!refreshed.length) {
-          setStatusText("NO LIVE STATIONS RESPONDING");
+          setStatusText(t("statusNoStations"));
           setPlaybackState("blocked");
           isSwitchingRef.current = false;
           return;
@@ -94,7 +215,7 @@ export default function Home() {
         isSwitchingRef.current = false;
         return;
       } catch {
-        setStatusText("NO LIVE STATIONS RESPONDING");
+        setStatusText(t("statusNoStations"));
         setPlaybackState("blocked");
         isSwitchingRef.current = false;
         return;
@@ -110,10 +231,28 @@ export default function Home() {
     if (audioReadyRef.current) return;
     audioReadyRef.current = true;
 
+    try {
+      const context = new AudioContext();
+      const analyser = context.createAnalyser();
+      analyser.fftSize = 128;
+      analyser.smoothingTimeConstant = 0.85;
+      const source = context.createMediaElementSource(audio);
+      source.connect(analyser);
+      analyser.connect(context.destination);
+      audioContextRef.current = context;
+      analyserRef.current = analyser;
+      sourceRef.current = source;
+    } catch (error) {
+      console.warn("AudioContext init failed:", error);
+    }
+
     const handlePlay = () => {
       setPlaybackState("playing");
-      setStatusText("PLAYING");
+      setStatusText(t("statusPlaying"));
       setStatusDetail(undefined);
+      if (audioContextRef.current?.state === "suspended") {
+        void audioContextRef.current.resume();
+      }
     };
     const handlePause = () => setPlaybackState("paused");
     const handleError = () => {
@@ -139,7 +278,7 @@ export default function Home() {
     const station = list[safeIndex];
     stationIndexRef.current = safeIndex;
     setStationIndex(safeIndex);
-    setStationName(station.name || "Unknown Station");
+    setStationName(station.name || t("unknownStation"));
     setTrackTitle(null);
     setStatusText(undefined);
     activeStationUrlRef.current = station.urlResolved;
@@ -166,7 +305,7 @@ export default function Home() {
     try {
       await audio.play();
       failedCountRef.current = 0;
-      setStatusText("PLAYING");
+      setStatusText(t("statusPlaying"));
     } catch {
       if (audio.error) {
         void handleStreamError("playback error");
@@ -200,9 +339,7 @@ export default function Home() {
     const sessionId = sessionRef.current + 1;
     sessionRef.current = sessionId;
     const isQuickTag = Boolean(tagOverride);
-    const processed = isQuickTag
-      ? null
-      : processTextInput(userActivity);
+    const processed = isQuickTag ? null : processTextInput(userActivity);
     const initialTag = isQuickTag ? tagOverride : processed?.tag ?? "lofi";
     setStationTag(initialTag.toUpperCase());
     setActiveTag(initialTag);
@@ -213,18 +350,23 @@ export default function Home() {
     setStationName("");
     setTrackTitle(null);
     setPlaybackState("idle");
-    setStatusText("TUNING...");
+    setStatusText(t("statusTuning"));
     if (isQuickTag) {
-      setStatusDetail(`Searching for ${initialTag}...`);
+      setStatusDetail(format("statusSearchingFor", { tag: initialTag }));
     } else if (processed) {
       setStatusDetail(
-        `VIBE: ${processed.category} | FREQUENCY: ${processed.genre}`
+        format("vibeDetail", {
+          category: processed.category,
+          genre: processed.genre,
+        })
       );
       console.log(
         `User Input: ${userActivity}, Matched Vibe: ${processed.category}, Selected Genre: ${processed.genre}`
       );
     } else {
-      setStatusDetail("VIBE: DIRECT | FREQUENCY: lofi");
+      setStatusDetail(
+        format("vibeDetail", { category: "DIRECT", genre: "lofi" })
+      );
     }
     failedCountRef.current = 0;
     activeStationUrlRef.current = null;
@@ -260,7 +402,7 @@ export default function Home() {
       await startStationPlayback(secureIndex);
       if (sessionId === sessionRef.current) {
         if (isQuickTag) {
-          setStatusDetail("Signal Locked!");
+          setStatusDetail(t("statusSignalLocked"));
         }
         setScreen("playing");
       }
@@ -360,11 +502,57 @@ export default function Home() {
     };
   }, [screen, stationIndex]);
 
+  useEffect(() => {
+    if (playbackState !== "playing") {
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+        animationFrameRef.current = null;
+      }
+      return;
+    }
+
+    const analyser = analyserRef.current;
+    if (!analyser) return;
+
+    const bufferLength = analyser.frequencyBinCount;
+    const dataArray = new Uint8Array(bufferLength);
+
+    const tick = () => {
+      analyser.getByteFrequencyData(dataArray);
+      const bucketSize = Math.floor(bufferLength / 16);
+      const levels = Array.from({ length: 16 }, (_, i) => {
+        const start = i * bucketSize;
+        const end = i === 15 ? bufferLength : start + bucketSize;
+        let sum = 0;
+        for (let j = start; j < end; j += 1) {
+          sum += dataArray[j];
+        }
+        const avg = sum / Math.max(1, end - start);
+        const normalized = Math.min(1, Math.max(0.15, avg / 255));
+        return normalized;
+      });
+
+      setVisualizerLevels(levels);
+      animationFrameRef.current = requestAnimationFrame(tick);
+    };
+
+    animationFrameRef.current = requestAnimationFrame(tick);
+    return () => {
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+        animationFrameRef.current = null;
+      }
+    };
+  }, [playbackState]);
+
   if (screen === "loading") {
     return (
       <LoadingScreen
         progress={connectionProgress}
-        title={`SCANNING AIRWAVES: ${stationTag}....`}
+        title={format("scanningAirwaves", { tag: stationTag })}
+        cancelLabel={t("cancel")}
+        lang={lang}
+        onSetLang={setLangValue}
       />
     );
   }
@@ -372,7 +560,7 @@ export default function Home() {
   if (screen === "playing") {
     return (
       <PlayerScreen
-        stationName={stationName || "SEARCHING..."}
+        stationName={stationName || t("searching")}
         currentTag={stationTag}
         trackTitle={trackTitle ?? undefined}
         onStop={handleStop}
@@ -381,12 +569,38 @@ export default function Home() {
         onPrevStation={handlePrevStation}
         isPlaying={playbackState === "playing"}
         statusText={
-          playbackState === "blocked" ? "AUDIO BLOCKED — PRESS PLAY" : statusText
+          playbackState === "blocked" ? t("statusAudioBlocked") : statusText
         }
         statusDetail={statusDetail}
+        labels={{
+          nowPlaying: t("nowPlaying"),
+          genre: t("genre"),
+          liveStream: t("liveStream"),
+          stop: t("stopButton"),
+        }}
+        lang={lang}
+        onSetLang={setLangValue}
+        visualizerLevels={visualizerLevels}
       />
     );
   }
 
-  return <IdleScreen onStart={handleStart} />;
+  return (
+    <IdleScreen
+      onStart={(activity, tagOverride) =>
+        handleStart(activity.trim().length ? activity : t("statusIdle"), tagOverride)
+      }
+      labels={{
+        tagLine: t("tagLine"),
+        title: t("title"),
+        subtitle: t("subtitle"),
+        inputLabel: t("inputLabel"),
+        placeholder: t("placeholder"),
+        startButton: t("startButton"),
+        quickVibes: t("quickVibes"),
+      }}
+      lang={lang}
+      onSetLang={setLangValue}
+    />
+  );
 }
