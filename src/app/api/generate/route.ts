@@ -1,29 +1,54 @@
-import Replicate from "replicate";
+import { RadioBrowserApi, StationSearchType } from "radio-browser-api";
 import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
-const replicate = new Replicate({
-  auth: process.env.REPLICATE_API_TOKEN ?? "",
-  useFileOutput: false,
-});
+type Station = {
+  id: string;
+  name: string;
+  urlResolved: string;
+  tags: string[];
+  favicon?: string;
+  country?: string;
+};
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const radioBrowser = new RadioBrowserApi("Neuro Radio", true);
 
-async function createPrompt(userAction: string) {
-  const trimmed = userAction.trim() || "IDLE";
-  return `${trimmed}. Instrumental, high quality, 8-bit textures, retro-game vibe, seamless background music.`;
-}
+const ensureBaseUrl = async () => {
+  if (!radioBrowser.getBaseUrl()) {
+    await radioBrowser.resolveBaseUrl();
+  }
+};
+
+const withRetry = async <T>(operation: () => Promise<T>): Promise<T> => {
+  try {
+    return await operation();
+  } catch (error) {
+    console.warn("RadioBrowser call failed, refreshing server.", error);
+    await radioBrowser.resolveBaseUrl();
+    return await operation();
+  }
+};
+
+const isHttpsUrl = (value?: string) =>
+  typeof value === "string" && value.trim().toLowerCase().startsWith("https://");
+
+const normalizeStations = (stations: Station[]) =>
+  stations
+    .filter((station) => isHttpsUrl(station.urlResolved))
+    .map((station) => ({
+      id: station.id,
+      name: station.name,
+      urlResolved: station.urlResolved,
+      tags: station.tags,
+      favicon: station.favicon,
+      country: station.country,
+    }));
+
+class NoStationsError extends Error {}
 
 export async function POST(request: NextRequest) {
-  if (!process.env.REPLICATE_API_TOKEN) {
-    return NextResponse.json(
-      { error: "Missing Replicate token in environment" },
-      { status: 500 }
-    );
-  }
-
-  let body: { userAction?: string } = {};
+  let body: { tag?: string } = {};
 
   try {
     body = await request.json();
@@ -31,82 +56,69 @@ export async function POST(request: NextRequest) {
     // Allow empty body.
   }
 
-  const prompt = await createPrompt(body.userAction ?? "IDLE");
-
   try {
-    const prediction = await replicate.predictions.create({
-      model: "minimax/music-1.5",
-      input: {
-        prompt,
-        lyrics: "[Instrumental]",
-      },
-      wait: false,
-    });
+    await ensureBaseUrl();
 
-    let current = prediction;
-    const startedAt = Date.now();
-    const timeoutMs = 180000;
+    const rawTag = typeof body.tag === "string" ? body.tag.trim() : "";
+    const tag = rawTag.length ? rawTag.toLowerCase() : "lofi";
+    console.info("Radio stations requested for tag:", tag);
 
-    while (
-      current.status !== "succeeded" &&
-      current.status !== "failed" &&
-      current.status !== "canceled"
-    ) {
-      if (Date.now() - startedAt > timeoutMs) {
-        return NextResponse.json(
-          { error: "Generation timed out" },
-          { status: 504 }
-        );
-      }
-      await sleep(2000);
-      current = await replicate.predictions.get(current.id);
-    }
-
-    if (current.status !== "succeeded") {
-      return NextResponse.json(
-        { error: current.error ?? "Generation failed" },
-        { status: 502 }
-      );
-    }
-
-    const normalizeUrl = (value: unknown): string | null => {
-      if (!value) return null;
-      if (typeof value === "string") return value;
-      if (typeof value === "object") {
-        if ("url" in value && typeof (value as { url?: unknown }).url === "string") {
-          return (value as { url: string }).url;
-        }
-        if (
-          "toString" in value &&
-          typeof (value as { toString?: unknown }).toString === "function"
-        ) {
-          const asString = String(value);
-          return asString.startsWith("http") ? asString : null;
-        }
-      }
-      return null;
-    };
-
-    let url: string | null = null;
-    if (Array.isArray(current.output)) {
-      url = normalizeUrl(current.output[0]);
-    } else {
-      url = normalizeUrl(current.output);
-    }
-
-    if (!url) {
-      return NextResponse.json(
-        { error: "Model did not return any audio" },
-        { status: 502 }
-      );
-    }
-
-    return NextResponse.json({ url });
+    await ensureBaseUrl();
+    const stations = await fetchSecureStationsForTag(tag);
+    const shuffled = [...stations].sort(() => Math.random() - 0.5);
+    return NextResponse.json({ tag, stations: shuffled });
   } catch (error) {
-    console.error("SERVER SIDE ERROR:", error);
+    console.error("RADIO API ERROR:", error);
+    if (error instanceof NoStationsError) {
+      return NextResponse.json(
+        { error: error.message, tag: body.tag ?? "lofi" },
+        { status: 404 }
+      );
+    }
     return NextResponse.json(
-      { error: "Failed to generate music" },
+      { error: "Failed to fetch radio stations" },
       { status: 500 }
     );
   }
 }
+
+const fetchSecureStationsForTag = async (tag: string) => {
+  const MAX_ATTEMPTS = 3;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+    const stations = await withRetry(() =>
+      radioBrowser.getStationsBy(
+        StationSearchType.byTag,
+        tag,
+        {
+          limit: 20,
+          order: "votes",
+          reverse: true,
+          hideBroken: false,
+        },
+        undefined,
+        true
+      )
+    );
+    const secure = normalizeStations(stations);
+    if (secure.length) {
+      console.info(
+        `Found ${secure.length} HTTPS stations for tag ${tag} (attempt ${attempt})`
+      );
+      return secure;
+    }
+    console.warn(`No HTTPS streams found for tag ${tag} (attempt ${attempt})`);
+  }
+
+  const fallbackStations = await withRetry(() =>
+    radioBrowser.getStationsByVotes(20)
+  );
+  const secureFallback = normalizeStations(fallbackStations);
+  if (secureFallback.length) {
+    console.info(
+      `Fallback returned ${secureFallback.length} HTTPS stations for tag ${tag}`
+    );
+    return secureFallback;
+  }
+
+  throw new NoStationsError(`No HTTPS stations available for tag "${tag}"`);
+};

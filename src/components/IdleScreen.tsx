@@ -3,8 +3,21 @@
 import { useState, FormEvent } from "react";
 
 type IdleScreenProps = {
-  onStart: (activity: string) => void;
+  onStart: (activity: string, tagOverride?: string) => void;
 };
+
+const quickTags = [
+  "LO-FI",
+  "CHIPTUNE",
+  "SYNTHWAVE",
+  "AMBIENT",
+  "TECHNO",
+  "RETRO GAME",
+  "JAZZ",
+  "PIANO",
+  "HIP-HOP",
+  "DNB",
+];
 
 export function IdleScreen({ onStart }: IdleScreenProps) {
   const [activity, setActivity] = useState("");
@@ -16,42 +29,78 @@ export function IdleScreen({ onStart }: IdleScreenProps) {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-black">
-      <div className="crt relative flex w-full max-w-xl flex-col items-center gap-10 px-6 py-10 text-center text-neon sm:px-10">
-        <div className="pointer-events-none absolute left-4 top-4 text-[10px] text-neon/70 sm:text-xs">
-          NEURO RADIO
-        </div>
+    <div className="flex min-h-screen items-center justify-center bg-background px-4 py-10">
+      <div className="crt-shell w-full max-w-5xl">
+        <div className="crt-screen crt-text crt-life relative flex flex-col items-center gap-10 px-6 py-10 text-center sm:px-12">
+          <div className="absolute left-6 top-6 h-3 w-16 bg-neon/40 shadow-[0_0_12px_rgba(255,119,168,0.7)]" />
+          <div className="absolute right-6 top-6 h-3 w-10 bg-neon/40 shadow-[0_0_12px_rgba(255,119,168,0.7)]" />
 
-        <form
-          onSubmit={handleSubmit}
-          className="mt-6 flex w-full max-w-md flex-col items-center gap-6"
-        >
-          <label
-            htmlFor="activity"
-            className="text-[10px] uppercase tracking-[0.25em] text-neon/80 sm:text-xs"
+          <header className="flex w-full flex-col items-center gap-3">
+            <p className="text-[10px] tracking-[0.5em] text-neon/70 sm:text-xs">
+              AI GENERATED VIBES
+            </p>
+            <h1 className="title-3d glow-pulse text-2xl text-neon-bright sm:text-4xl">
+              NEURO RADIO
+            </h1>
+            <p className="text-[10px] tracking-[0.3em] text-neon/70 sm:text-xs">
+              IT GOES LIKE
+            </p>
+          </header>
+
+          <form
+            onSubmit={handleSubmit}
+            className="mt-4 flex w-full max-w-xl flex-col items-center gap-6"
           >
-            WHAT ARE YOU DOING?
-          </label>
+            <label
+              htmlFor="activity"
+              className="text-[10px] uppercase tracking-[0.35em] text-neon/80 sm:text-xs"
+            >
+              WHAT ARE YOU DOING?
+            </label>
 
-          <input
-            id="activity"
-            type="text"
-            value={activity}
-            onChange={(e) => setActivity(e.target.value)}
-            className="w-full rounded-none border-2 border-neon bg-black px-3 py-3 text-[10px] uppercase tracking-[0.2em] text-neon outline-none ring-2 ring-transparent transition focus:border-neon-bright focus:ring-neon-bright sm:px-4 sm:py-4 sm:text-xs"
-            autoComplete="off"
-          />
+            <input
+              id="activity"
+              type="text"
+              value={activity}
+              onChange={(e) => setActivity(e.target.value)}
+              className="pixel-input w-full rounded-none border-2 border-neon bg-[#2a182a] px-4 py-4 text-[10px] uppercase tracking-[0.25em] text-neon outline-none transition focus:border-neon-bright focus:ring-2 focus:ring-neon-bright sm:text-xs"
+              autoComplete="off"
+            />
 
-          <button
-            type="submit"
-            className="pixel-button mt-4 w-full max-w-[220px] border-2 border-neon bg-black px-4 py-3 text-[10px] uppercase tracking-[0.25em] text-neon transition hover:bg-neon hover:text-black sm:px-6 sm:py-4 sm:text-xs"
-          >
-            START STATION
-          </button>
-        </form>
+            <button
+              type="submit"
+              className="pixel-button mt-2 w-full max-w-[240px] border-2 border-neon bg-[#2a182a] px-4 py-3 text-[10px] uppercase tracking-[0.35em] text-neon transition hover:bg-neon hover:text-[#2d1b2e] sm:px-6 sm:py-4 sm:text-xs"
+            >
+              START STATION
+            </button>
+          </form>
 
-        <div className="pointer-events-none absolute bottom-4 right-4 text-[8px] text-neon/60 sm:text-[10px]">
-          v0.1 BETA
+          <div className="mt-2 flex w-full max-w-2xl flex-col gap-4">
+            <p className="text-[10px] uppercase tracking-[0.35em] text-neon/80 sm:text-xs">
+              QUICK VIBES:
+            </p>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              {quickTags.map((tag) => (
+                <button
+                  key={tag}
+                  type="button"
+                  onClick={() => onStart(tag, tag)}
+                  className="pixel-tag text-[9px] uppercase tracking-[0.25em] text-neon transition hover:bg-neon hover:text-[#2d1b2e] sm:text-[10px]"
+                >
+                  {tag}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="pointer-events-none absolute bottom-6 left-10 pixel-heart" />
+          <div className="pointer-events-none absolute bottom-10 right-16 pixel-heart" />
+          <div className="pointer-events-none absolute top-20 right-12 pixel-sparkle" />
+          <div className="pointer-events-none absolute top-24 left-16 pixel-sparkle" />
+
+          <div className="pointer-events-none absolute bottom-4 right-6 text-[8px] text-neon/60 sm:text-[10px]">
+            v0.1 BETA
+          </div>
         </div>
       </div>
     </div>

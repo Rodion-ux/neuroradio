@@ -4,216 +4,279 @@ import { useEffect, useRef, useState } from "react";
 import { IdleScreen } from "../components/IdleScreen";
 import { LoadingScreen } from "../components/LoadingScreen";
 import { PlayerScreen } from "../components/PlayerScreen";
+import { getStationByVibe } from "../lib/radio-engine";
 
 type ScreenState = "idle" | "loading" | "playing";
 type PlaybackState = "idle" | "playing" | "paused" | "blocked";
 
+type Station = {
+  id: string;
+  name: string;
+  urlResolved: string;
+  tags: string[];
+  favicon?: string;
+  country?: string;
+};
+
 export default function Home() {
   const [screen, setScreen] = useState<ScreenState>("idle");
-  const [activity, setActivity] = useState<string>("IDLE");
-  const [userAction, setUserAction] = useState("IDLE");
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [generationProgress, setGenerationProgress] = useState(0);
-  const [statusIndex, setStatusIndex] = useState(0);
-  const [generatedUrl, setGeneratedUrl] = useState<string | null>(null);
-  const [nextUrl, setNextUrl] = useState<string | null>(null);
-  const [isPrefetchingNext, setIsPrefetchingNext] = useState(false);
+  const [isConnecting, setIsConnecting] = useState(false);
+  const [connectionProgress, setConnectionProgress] = useState(0);
+  const [stations, setStations] = useState<Station[]>([]);
+  const [stationIndex, setStationIndex] = useState(0);
+  const [stationTag, setStationTag] = useState("LOFI");
+  const [activeTag, setActiveTag] = useState("lofi");
+  const [stationName, setStationName] = useState("");
+  const [trackTitle, setTrackTitle] = useState<string | null>(null);
   const [playbackState, setPlaybackState] = useState<PlaybackState>("idle");
-  const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(60);
+  const [statusText, setStatusText] = useState<string | undefined>(undefined);
+  const [statusDetail, setStatusDetail] = useState<string | undefined>(undefined);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const pendingSwapRef = useRef(false);
+  const audioReadyRef = useRef(false);
   const sessionRef = useRef(0);
+  const stationsRef = useRef<Station[]>([]);
+  const stationIndexRef = useRef(0);
+  const failedCountRef = useRef(0);
+  const activeTagRef = useRef("lofi");
+  const isSwitchingRef = useRef(false);
+  const activeStationUrlRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!isGenerating) return;
+    stationsRef.current = stations;
+  }, [stations]);
 
-    setGenerationProgress(0);
-    setStatusIndex(0);
+  useEffect(() => {
+    activeTagRef.current = activeTag;
+  }, [activeTag]);
+
+  useEffect(() => {
+    if (!isConnecting) return;
+
+    setConnectionProgress(0);
     const startedAt = Date.now();
+    const durationMs = 7000;
     const interval = setInterval(() => {
       const elapsed = Date.now() - startedAt;
-      const nextProgress = Math.min(100, Math.floor((elapsed / 30000) * 100));
-      setGenerationProgress((prev) => (nextProgress > prev ? nextProgress : prev));
-      if (nextProgress < 34) setStatusIndex(0);
-      else if (nextProgress < 67) setStatusIndex(1);
-      else setStatusIndex(2);
-    }, 400);
+      const nextProgress = Math.min(100, Math.floor((elapsed / durationMs) * 100));
+      setConnectionProgress((prev) => (nextProgress > prev ? nextProgress : prev));
+    }, 350);
 
     return () => clearInterval(interval);
-  }, [isGenerating]);
+  }, [isConnecting]);
 
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
+  const handleStreamError = async (reason?: string) => {
+    if (isSwitchingRef.current) return;
+    const list = stationsRef.current;
+    if (!list.length) return;
+    isSwitchingRef.current = true;
+    failedCountRef.current += 1;
+    setStatusText("SIGNAL LOST - RETRYING...");
+    if (reason) {
+      setStatusDetail(reason);
+    }
 
-    const handleTime = () => setCurrentTime(Math.floor(audio.currentTime));
-    const handleLoaded = () => {
-      if (Number.isFinite(audio.duration)) {
-        setDuration(Math.max(1, Math.round(audio.duration)));
-      }
-    };
-    const handlePlay = () => setPlaybackState("playing");
-    const handlePause = () => setPlaybackState("paused");
-    const handleEnded = async () => {
-      if (nextUrl) {
-        const url = nextUrl;
-        setNextUrl(null);
-        await startPlayback(url);
+    if (failedCountRef.current >= list.length) {
+      try {
+        const { stations: refreshed } = await fetchStations(
+          activeTagRef.current ?? "lofi"
+        );
+        if (!refreshed.length) {
+          setStatusText("NO LIVE STATIONS RESPONDING");
+          setPlaybackState("blocked");
+          isSwitchingRef.current = false;
+          return;
+        }
+        setStations(refreshed);
+        stationsRef.current = refreshed;
+        failedCountRef.current = 0;
+        const randomIndex = Math.floor(Math.random() * refreshed.length);
+        await startStationPlayback(randomIndex);
+        isSwitchingRef.current = false;
+        return;
+      } catch {
+        setStatusText("NO LIVE STATIONS RESPONDING");
+        setPlaybackState("blocked");
+        isSwitchingRef.current = false;
         return;
       }
-      pendingSwapRef.current = true;
-      audio.currentTime = 0;
-      try {
-        await audio.play();
-        setPlaybackState("playing");
-      } catch {
-        setPlaybackState("blocked");
-      }
+    }
+
+    const nextIndex = (stationIndexRef.current + 1) % list.length;
+    await startStationPlayback(nextIndex);
+    isSwitchingRef.current = false;
+  };
+
+  const setupAudio = (audio: HTMLAudioElement) => {
+    if (audioReadyRef.current) return;
+    audioReadyRef.current = true;
+
+    const handlePlay = () => {
+      setPlaybackState("playing");
+      setStatusText("PLAYING");
+      setStatusDetail(undefined);
+    };
+    const handlePause = () => setPlaybackState("paused");
+    const handleError = () => {
+      void handleStreamError("audio.onerror");
     };
 
-    audio.addEventListener("timeupdate", handleTime);
-    audio.addEventListener("loadedmetadata", handleLoaded);
     audio.addEventListener("play", handlePlay);
     audio.addEventListener("pause", handlePause);
-    audio.addEventListener("ended", handleEnded);
+    audio.addEventListener("error", handleError);
+    audio.addEventListener("stalled", () => {
+      void handleStreamError("audio stalled");
+    });
+    audio.addEventListener("ended", () => {
+      void handleStreamError("stream ended");
+    });
+  };
 
-    return () => {
-      audio.removeEventListener("timeupdate", handleTime);
-      audio.removeEventListener("loadedmetadata", handleLoaded);
-      audio.removeEventListener("play", handlePlay);
-      audio.removeEventListener("pause", handlePause);
-      audio.removeEventListener("ended", handleEnded);
-    };
-  }, [generatedUrl, nextUrl]);
+  const startStationPlayback = async (index: number) => {
+    const list = stationsRef.current;
+    if (!list.length) return;
 
-  useEffect(() => {
-    return () => {
-      audioRef.current?.pause();
-    };
-  }, []);
+    const safeIndex = (index + list.length) % list.length;
+    const station = list[safeIndex];
+    stationIndexRef.current = safeIndex;
+    setStationIndex(safeIndex);
+    setStationName(station.name || "Unknown Station");
+    setTrackTitle(null);
+    setStatusText(undefined);
+    activeStationUrlRef.current = station.urlResolved;
 
-  useEffect(() => {
-    if (pendingSwapRef.current && nextUrl) {
-      pendingSwapRef.current = false;
-      const url = nextUrl;
-      setNextUrl(null);
-      void startPlayback(url);
+    const audio = audioRef.current ?? new Audio();
+    audioRef.current = audio;
+    setupAudio(audio);
+    audio.src = station.urlResolved;
+    audio.loop = false;
+    audio.volume = 0.75;
+    audio.preload = "none";
+    audio.crossOrigin = "anonymous";
+    const timeoutId = window.setTimeout(() => {
+      if (audio.readyState < 2) {
+        void handleStreamError("stream timeout");
+      }
+    }, 5000);
+    const clearTimeouts = () => window.clearTimeout(timeoutId);
+    audio.addEventListener("playing", clearTimeouts, { once: true });
+    audio.addEventListener("canplay", clearTimeouts, { once: true });
+
+    console.log("Попытка воспроизведения URL:", station.urlResolved);
+
+    try {
+      await audio.play();
+      failedCountRef.current = 0;
+      setStatusText("PLAYING");
+    } catch {
+      if (audio.error) {
+        void handleStreamError("playback error");
+      } else {
+        setPlaybackState("blocked");
+      }
     }
-  }, [nextUrl]);
+  };
 
-  useEffect(() => {
-    if (screen !== "playing" || !generatedUrl) return;
-    if (nextUrl || isPrefetchingNext) return;
-    void prefetchNext(userAction);
-  }, [screen, generatedUrl, nextUrl, isPrefetchingNext, userAction]);
-
-  const generateTrack = async (action: string) => {
+  const fetchStations = async (tag: string) => {
+    const requestTag = tag.trim().toLowerCase();
     const response = await fetch("/api/generate", {
       method: "POST",
-      body: JSON.stringify({ userAction: action }),
+      body: JSON.stringify({ tag: requestTag }),
       headers: { "Content-Type": "application/json" },
     });
 
-    console.log("API Response status:", response.status);
-
     if (!response.ok) {
       const payload = await response.json().catch(() => null);
-      throw new Error(payload?.error ?? "Failed to generate music");
+      throw new Error(payload?.error ?? "Failed to fetch stations");
     }
 
     const data = await response.json();
-    if (!data.url) {
-      throw new Error("No audio returned from model");
-    }
-
-    return data.url as string;
+    return {
+      tag: (data.tag as string) ?? tag,
+      stations: (data.stations as Station[]) ?? [],
+    };
   };
 
-  const startPlayback = async (url: string) => {
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.src = "";
-    }
-    const audio = new Audio(url);
-    audio.loop = false;
-    audio.volume = 0.75;
-    audioRef.current = audio;
-    setGeneratedUrl(url);
-    setScreen("playing");
-    setCurrentTime(0);
-    setDuration(60);
-    try {
-      await audio.play();
-      setPlaybackState("playing");
-    } catch {
-      setPlaybackState("blocked");
-    }
-  };
-
-  const prefetchNext = async (action: string) => {
-    if (isPrefetchingNext || nextUrl) return;
-    setIsPrefetchingNext(true);
-    const sessionId = sessionRef.current;
-    try {
-      const url = await generateTrack(action);
-      if (sessionId !== sessionRef.current) return;
-      setNextUrl(url);
-    } catch (error) {
-      console.error("Prefetch error:", error);
-    } finally {
-      if (sessionId === sessionRef.current) {
-        setIsPrefetchingNext(false);
-      }
-    }
-  };
-
-  const handleStart = async (userActivity: string) => {
-    const trimmedAction = userActivity.trim();
-    const actionRaw = trimmedAction.length ? trimmedAction : "IDLE";
-    const actionLabel = actionRaw.toUpperCase();
-    sessionRef.current += 1;
-    setActivity(actionLabel);
-    setUserAction(actionRaw);
+  const handleStart = async (userActivity: string, tagOverride?: string) => {
+    const sessionId = sessionRef.current + 1;
+    sessionRef.current = sessionId;
+    const initialTag = tagOverride ? tagOverride : getStationByVibe(userActivity);
+    setStationTag(initialTag.toUpperCase());
+    setActiveTag(initialTag);
     setScreen("loading");
-    setGeneratedUrl(null);
-    setNextUrl(null);
-    setIsGenerating(true);
-    setGenerationProgress(0);
+    setIsConnecting(true);
+    setConnectionProgress(0);
+    setStations([]);
+    setStationName("");
+    setTrackTitle(null);
     setPlaybackState("idle");
-    setCurrentTime(0);
-    setDuration(60);
-    pendingSwapRef.current = false;
+    setStatusText("TUNING...");
+    setStatusDetail(`Searching for ${initialTag}...`);
+    failedCountRef.current = 0;
+    activeStationUrlRef.current = null;
 
     try {
-      const url = await generateTrack(actionRaw);
-      await startPlayback(url);
-      void prefetchNext(actionRaw);
+      let resolvedTag = initialTag;
+      let stationList: Station[] = [];
+      let secureIndex = -1;
+
+      for (let attempt = 0; attempt < 3 && secureIndex === -1; attempt += 1) {
+        const result = await fetchStations(resolvedTag);
+        if (sessionId !== sessionRef.current) return;
+        stationList = result.stations;
+        resolvedTag = result.tag;
+        setStationTag(resolvedTag.toUpperCase());
+        setActiveTag(resolvedTag);
+
+        if (!stationList.length) {
+          throw new Error("No stations found");
+        }
+
+        secureIndex = stationList.findIndex((station) =>
+          station.urlResolved.toLowerCase().startsWith("https://")
+        );
+      }
+
+      if (secureIndex === -1) {
+        throw new Error("No secure streams available for this tag");
+      }
+
+      setStations(stationList);
+      stationsRef.current = stationList;
+      await startStationPlayback(secureIndex);
+      if (sessionId === sessionRef.current) {
+        setStatusDetail("Signal Locked!");
+        setScreen("playing");
+      }
     } catch (error) {
-      console.error("Generate error:", error);
+      console.error("Station fetch error:", error);
+      setStatusText(
+        error instanceof Error ? error.message : "Unable to find live stations"
+      );
       setScreen("idle");
     } finally {
-      setIsGenerating(false);
-      setGenerationProgress(100);
+      if (sessionId === sessionRef.current) {
+        setIsConnecting(false);
+        setConnectionProgress(100);
+      }
     }
   };
 
   const handleStop = () => {
+    sessionRef.current += 1;
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current.src = "";
-      audioRef.current = null;
     }
-    setGeneratedUrl(null);
-    setNextUrl(null);
     setScreen("idle");
-    setIsGenerating(false);
-    setGenerationProgress(0);
+    setStations([]);
+    setStationName("");
+    setTrackTitle(null);
     setPlaybackState("idle");
-    setCurrentTime(0);
-    setIsPrefetchingNext(false);
-    pendingSwapRef.current = false;
-    sessionRef.current += 1;
+    setStatusText(undefined);
+    setStatusDetail(undefined);
+    setConnectionProgress(0);
+    setIsConnecting(false);
+    activeStationUrlRef.current = null;
   };
 
   const handleTogglePlay = async () => {
@@ -231,40 +294,79 @@ export default function Home() {
     }
   };
 
-  const handleSeek = (nextTime: number) => {
-    if (!audioRef.current) return;
-    audioRef.current.currentTime = nextTime;
-    setCurrentTime(nextTime);
+  const handleNextStation = () => {
+    const list = stationsRef.current;
+    if (!list.length) return;
+    failedCountRef.current = 0;
+    const nextIndex = (stationIndexRef.current + 1) % list.length;
+    void startStationPlayback(nextIndex);
   };
 
+  const handlePrevStation = () => {
+    const list = stationsRef.current;
+    if (!list.length) return;
+    failedCountRef.current = 0;
+    const prevIndex = (stationIndexRef.current - 1 + list.length) % list.length;
+    void startStationPlayback(prevIndex);
+  };
+
+  useEffect(() => {
+    if (screen !== "playing") return;
+    const url = activeStationUrlRef.current;
+    if (!url) return;
+
+    let cancelled = false;
+    const fetchMetadata = async () => {
+      try {
+        const response = await fetch(
+          `/api/stream-meta?url=${encodeURIComponent(url)}`
+        );
+        if (!response.ok) return;
+        const payload = await response.json();
+        const title = typeof payload.title === "string" ? payload.title.trim() : "";
+        if (!cancelled) {
+          setTrackTitle(title.length ? title : null);
+        }
+      } catch {
+        if (!cancelled) {
+          setTrackTitle(null);
+        }
+      }
+    };
+
+    void fetchMetadata();
+    const interval = setInterval(fetchMetadata, 15000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [screen, stationIndex]);
+
   if (screen === "loading") {
-    const statusSteps = [
-      "COLLECTING PIXELS...",
-      "WARMING UP NEURONS...",
-      "TUNING FREQUENCIES...",
-    ];
     return (
       <LoadingScreen
-        progress={generationProgress}
-        title={statusSteps[statusIndex]}
-        statusLine={`GENRE: ${activity}`}
+        progress={connectionProgress}
+        title={`SCANNING AIRWAVES: ${stationTag}....`}
       />
     );
   }
 
-  if (screen === "playing" && generatedUrl) {
+  if (screen === "playing") {
     return (
       <PlayerScreen
-        activity={activity}
+        stationName={stationName || "SEARCHING..."}
+        currentTag={stationTag}
+        trackTitle={trackTitle ?? undefined}
         onStop={handleStop}
         onTogglePlay={handleTogglePlay}
-        onSeek={handleSeek}
+        onNextStation={handleNextStation}
+        onPrevStation={handlePrevStation}
         isPlaying={playbackState === "playing"}
-        currentTime={currentTime}
-        duration={duration}
         statusText={
-          playbackState === "blocked" ? "AUDIO BLOCKED — PRESS PLAY" : undefined
+          playbackState === "blocked" ? "AUDIO BLOCKED — PRESS PLAY" : statusText
         }
+        statusDetail={statusDetail}
       />
     );
   }
