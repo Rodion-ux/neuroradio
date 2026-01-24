@@ -1,26 +1,338 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #000000;
+  --foreground: #39ff14;
+  --neon: #39ff14;
+  --neon-bright: #83ff5e;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --font-sans: var(--font-press-start);
+  --font-mono: var(--font-press-start);
+  --color-neon: var(--neon);
+  --color-neon-bright: var(--neon-bright);
 }
 
 body {
-  background: var(--background);
+  background-color: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-press-start), system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
+  text-transform: uppercase;
+}
+
+/* Utility colors for Tailwind classes */
+.text-neon {
+  color: var(--neon);
+}
+
+.text-neon-bright {
+  color: var(--neon-bright);
+}
+
+.bg-neon {
+  background-color: var(--neon);
+}
+
+.bg-neon-bright {
+  background-color: var(--neon-bright);
+}
+
+.border-neon {
+  border-color: var(--neon);
+}
+
+/* CRT & retro effects */
+.crt {
+  position: relative;
+  background-color: #000;
+  overflow: hidden;
+  box-shadow:
+    0 0 0 2px rgba(57, 255, 20, 0.7),
+    0 0 25px rgba(57, 255, 20, 0.4);
+}
+
+.crt::before {
+  content: "";
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  background-image: repeating-linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.04),
+    rgba(255, 255, 255, 0.04) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+  mix-blend-mode: soft-light;
+  opacity: 0.7;
+}
+
+.crt::after {
+  content: "";
+  pointer-events: none;
+  position: absolute;
+  inset: -20%;
+  background: radial-gradient(
+    circle at center,
+    transparent 0%,
+    transparent 55%,
+    rgba(0, 0, 0, 0.5) 85%,
+    rgba(0, 0, 0, 0.9) 100%
+  );
+}
+
+@keyframes crt-flicker {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.98;
+  }
+}
+
+.crt {
+  animation: crt-flicker 2.2s infinite steps(2, start);
+}
+
+/* Pixel buttons */
+.pixel-button {
+  image-rendering: pixelated;
+  box-shadow:
+    0 0 0 2px rgba(57, 255, 20, 0.8),
+    0 0 12px rgba(57, 255, 20, 0.8);
+}
+
+.pixel-button:active {
+  transform: translateY(1px);
+  box-shadow:
+    0 0 0 2px rgba(57, 255, 20, 0.8),
+    0 0 4px rgba(57, 255, 20, 0.6);
+}
+
+/* Pixel-style visualizer */
+.pixel-visualizer {
+  image-rendering: pixelated;
+}
+
+.pixel-progress {
+  image-rendering: pixelated;
+}
+
+.pixel-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 16px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.pixel-slider::-webkit-slider-runnable-track {
+  height: 10px;
+  background: #000;
+  border: 2px solid var(--neon);
+  box-shadow: inset 0 0 0 2px #000;
+}
+
+.pixel-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  margin-top: -6px;
+  height: 20px;
+  width: 20px;
+  background: var(--neon);
+  box-shadow: 0 0 0 2px #000, 0 0 8px rgba(57, 255, 20, 0.8);
+  border-radius: 0;
+}
+
+.pixel-slider::-moz-range-track {
+  height: 10px;
+  background: #000;
+  border: 2px solid var(--neon);
+}
+
+.pixel-slider::-moz-range-thumb {
+  height: 18px;
+  width: 18px;
+  background: var(--neon);
+  border-radius: 0;
+  border: 2px solid #000;
+}
+
+@keyframes equalize {
+  0% {
+    transform: scaleY(0.2);
+  }
+  25% {
+    transform: scaleY(0.8);
+  }
+  50% {
+    transform: scaleY(0.4);
+  }
+  75% {
+    transform: scaleY(1);
+  }
+  100% {
+    transform: scaleY(0.3);
+  }
+}
+
+.visualizer-bar {
+  animation: equalize 1.2s infinite;
+}
+
+@keyframes visualizerBounce {
+  0% {
+    transform: scaleY(0.25);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+  100% {
+    transform: scaleY(0.35);
+  }
+}
+
+.visualizer-active .visualizer-bar {
+  animation: visualizerBounce 0.9s infinite alternate;
+  animation-play-state: running;
+}
+
+.visualizer-muted .visualizer-bar {
+  animation-play-state: paused;
+  transform: scaleY(0.4);
+}
+
+@keyframes neonShift {
+  0% {
+    color: #39ff14;
+    text-shadow: 0 0 6px rgba(57, 255, 20, 0.9);
+  }
+  50% {
+    color: #7cf9ff;
+    text-shadow: 0 0 8px rgba(124, 249, 255, 0.9);
+  }
+  100% {
+    color: #ff7bf2;
+    text-shadow: 0 0 8px rgba(255, 123, 242, 0.9);
+  }
+}
+
+.neon-title {
+  animation: neonShift 3s infinite steps(2, start);
+}
+
+@keyframes neonBreathe {
+  0% {
+    box-shadow: 0 0 0 rgba(57, 255, 20, 0);
+  }
+  50% {
+    box-shadow: 0 0 35px rgba(57, 255, 20, 0.35);
+  }
+  100% {
+    box-shadow: 0 0 0 rgba(57, 255, 20, 0);
+  }
+}
+
+.neon-breathe {
+  animation: neonBreathe 4s ease-in-out infinite;
+}
+
+@keyframes floatNotes {
+  0% {
+    transform: translateY(0);
+    opacity: 0;
+  }
+  10% {
+    opacity: 0.8;
+  }
+  100% {
+    transform: translateY(-140px);
+    opacity: 0;
+  }
+}
+
+.pixel-note {
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  background: var(--neon-bright);
+  image-rendering: pixelated;
+  animation: floatNotes 6s infinite;
+}
+
+.note-left-1 {
+  left: 18px;
+  bottom: 20px;
+  animation-delay: 0s;
+}
+
+.note-left-2 {
+  left: 26px;
+  bottom: 80px;
+  animation-delay: 1.2s;
+}
+
+.note-left-3 {
+  left: 12px;
+  bottom: 140px;
+  animation-delay: 2.4s;
+}
+
+.note-right-1 {
+  right: 18px;
+  bottom: 30px;
+  animation-delay: 0.6s;
+}
+
+.note-right-2 {
+  right: 26px;
+  bottom: 90px;
+  animation-delay: 1.8s;
+}
+
+.note-right-3 {
+  right: 12px;
+  bottom: 150px;
+  animation-delay: 3s;
+}
+
+/* Slightly desync bars for a more organic look */
+.visualizer-bar-0,
+.visualizer-bar-4,
+.visualizer-bar-8,
+.visualizer-bar-12 {
+  animation-duration: 1s;
+}
+
+.visualizer-bar-1,
+.visualizer-bar-5,
+.visualizer-bar-9,
+.visualizer-bar-13 {
+  animation-duration: 1.4s;
+}
+
+.visualizer-bar-2,
+.visualizer-bar-6,
+.visualizer-bar-10,
+.visualizer-bar-14 {
+  animation-duration: 1.1s;
+}
+
+.visualizer-bar-3,
+.visualizer-bar-7,
+.visualizer-bar-11,
+.visualizer-bar-15 {
+  animation-duration: 1.6s;
+}
+
+/* Make all raster images look pixelated if used */
+img,
+canvas,
+svg {
+  image-rendering: pixelated;
 }
