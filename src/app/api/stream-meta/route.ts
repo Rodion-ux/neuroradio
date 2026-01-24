@@ -17,7 +17,12 @@ const createStreamReader = (reader: ReadableStreamDefaultReader<Uint8Array>) => 
         if (done || !value) {
           break;
         }
-        pending = value;
+        const normalized = Buffer.from(value);
+        pending = new Uint8Array(
+          normalized.buffer as ArrayBuffer,
+          normalized.byteOffset,
+          normalized.byteLength
+        );
       }
 
       const take = Math.min(pending.length, length - offset);
