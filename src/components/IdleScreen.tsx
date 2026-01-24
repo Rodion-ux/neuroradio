@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, FormEvent } from "react";
+import { BackgroundFx } from "./BackgroundFx";
 
 type IdleScreenLabels = {
   tagLine: string;
@@ -45,6 +46,7 @@ export function IdleScreen({ onStart, labels, lang, onSetLang }: IdleScreenProps
     <div className="flex min-h-screen items-center justify-center bg-background px-4 py-10">
       <div className="crt-shell w-full max-w-5xl">
         <div className="crt-screen crt-text crt-life relative flex flex-col items-center gap-10 px-6 py-10 text-center sm:px-12">
+          <BackgroundFx />
           <div className="absolute left-6 top-6 h-3 w-16 bg-neon/40 shadow-[0_0_12px_rgba(255,119,168,0.7)]" />
           <div className="absolute right-6 top-6 h-3 w-10 bg-neon/40 shadow-[0_0_12px_rgba(255,119,168,0.7)]" />
 

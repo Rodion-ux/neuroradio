@@ -535,6 +535,113 @@ body {
   transform-origin: bottom;
 }
 
+/* Background FX layers */
+.fx-stars,
+.fx-rain,
+.fx-scanlines,
+.fx-flicker {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.fx-stars {
+  inset: -40% 0;
+  opacity: 0.3;
+  mix-blend-mode: screen;
+  background-image:
+    radial-gradient(rgba(255, 153, 204, 0.9) 1px, transparent 1px),
+    radial-gradient(rgba(157, 249, 255, 0.9) 1px, transparent 1px),
+    radial-gradient(rgba(255, 184, 107, 0.9) 1px, transparent 1px);
+  background-size: 140px 140px, 220px 220px, 300px 300px;
+  background-position: 0 0, 40px 80px, 120px 140px;
+  animation: starsDrift 26s linear infinite;
+  image-rendering: pixelated;
+}
+
+.fx-rain {
+  inset: -60% 0;
+  opacity: 0.2;
+  mix-blend-mode: screen;
+  background-image:
+    linear-gradient(
+      180deg,
+      rgba(255, 119, 168, 0.6) 0%,
+      rgba(255, 119, 168, 0.2) 12%,
+      transparent 40%
+    ),
+    linear-gradient(
+      180deg,
+      rgba(157, 249, 255, 0.5) 0%,
+      rgba(157, 249, 255, 0.15) 12%,
+      transparent 45%
+    );
+  background-size: 60px 180px, 90px 220px;
+  background-position: 0 0, 45px 90px;
+  animation: rainFall 18s linear infinite;
+  filter: blur(0.4px);
+  image-rendering: pixelated;
+}
+
+.fx-scanlines {
+  opacity: 0.12;
+  background-image: repeating-linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0) 0px,
+    rgba(0, 0, 0, 0) 2px,
+    rgba(0, 0, 0, 0.35) 3px
+  );
+  mix-blend-mode: soft-light;
+  animation: scanlineSweep 10s linear infinite;
+}
+
+.fx-flicker {
+  opacity: 0.16;
+  background: radial-gradient(
+    circle at center,
+    rgba(255, 255, 255, 0.08),
+    transparent 65%
+  );
+  animation: fxFlicker 4s infinite steps(2, end);
+}
+
+@keyframes starsDrift {
+  0% {
+    transform: translateY(-10%);
+  }
+  100% {
+    transform: translateY(10%);
+  }
+}
+
+@keyframes rainFall {
+  0% {
+    transform: translateY(-20%);
+  }
+  100% {
+    transform: translateY(20%);
+  }
+}
+
+@keyframes scanlineSweep {
+  0% {
+    background-position: 0 0;
+  }
+  100% {
+    background-position: 0 120px;
+  }
+}
+
+@keyframes fxFlicker {
+  0%,
+  100% {
+    opacity: 0.14;
+  }
+  50% {
+    opacity: 0.22;
+  }
+}
+
 /* Bars use inline scale transforms */
 
 /* Make all raster images look pixelated if used */

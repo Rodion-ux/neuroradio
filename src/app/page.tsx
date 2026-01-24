@@ -134,9 +134,6 @@ export default function Home() {
   const [playbackState, setPlaybackState] = useState<PlaybackState>("idle");
   const [statusText, setStatusText] = useState<string | undefined>(undefined);
   const [statusDetail, setStatusDetail] = useState<string | undefined>(undefined);
-  const [visualizerLevels, setVisualizerLevels] = useState<number[]>(
-    Array.from({ length: 16 }, () => 0.35)
-  );
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audioReadyRef = useRef(false);
   const sessionRef = useRef(0);
@@ -150,6 +147,7 @@ export default function Home() {
   const analyserRef = useRef<AnalyserNode | null>(null);
   const sourceRef = useRef<MediaElementAudioSourceNode | null>(null);
   const animationFrameRef = useRef<number | null>(null);
+  const audioLevelRef = useRef(0.25);
 
   const t = (key: TranslationKey) => translations[key][lang];
   const format = (key: TranslationKey, params: Record<string, string>) => {
@@ -514,25 +512,33 @@ export default function Home() {
     const analyser = analyserRef.current;
     if (!analyser) return;
 
-    const bufferLength = analyser.frequencyBinCount;
-    const dataArray = new Uint8Array(bufferLength);
+    const bufferLength = analyser.fftSize;
+    const timeData = new Uint8Array(bufferLength);
+    let fastEnergy = 0.2;
+    let slowEnergy = 0.2;
+    let beatPulse = 0;
 
     const tick = () => {
-      analyser.getByteFrequencyData(dataArray);
-      const bucketSize = Math.floor(bufferLength / 16);
-      const levels = Array.from({ length: 16 }, (_, i) => {
-        const start = i * bucketSize;
-        const end = i === 15 ? bufferLength : start + bucketSize;
-        let sum = 0;
-        for (let j = start; j < end; j += 1) {
-          sum += dataArray[j];
-        }
-        const avg = sum / Math.max(1, end - start);
-        const normalized = Math.min(1, Math.max(0.15, avg / 255));
-        return normalized;
-      });
+      analyser.getByteTimeDomainData(timeData);
+      let sumSquares = 0;
+      for (let i = 0; i < bufferLength; i += 1) {
+        const centered = (timeData[i] - 128) / 128;
+        sumSquares += centered * centered;
+      }
+      const rms = Math.sqrt(sumSquares / Math.max(1, bufferLength));
+      const energy = Math.min(1, rms * 2.4);
+      fastEnergy += (energy - fastEnergy) * 0.5;
+      slowEnergy += (energy - slowEnergy) * 0.03;
 
-      setVisualizerLevels(levels);
+      const isBeat = fastEnergy > slowEnergy * 1.12 && energy > 0.05;
+      if (isBeat) {
+        beatPulse = 1.2;
+      } else {
+        beatPulse *= 0.7;
+      }
+
+      const combined = Math.min(1.6, fastEnergy + beatPulse);
+      audioLevelRef.current = Math.max(0.05, combined);
       animationFrameRef.current = requestAnimationFrame(tick);
     };
 
@@ -580,7 +586,7 @@ export default function Home() {
         }}
         lang={lang}
         onSetLang={setLangValue}
-        visualizerLevels={visualizerLevels}
+        audioLevelRef={audioLevelRef}
       />
     );
   }
