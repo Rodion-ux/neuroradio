@@ -32,25 +32,27 @@ export function LoadingScreen({
           <div className="absolute left-6 top-6 h-3 w-16 bg-neon/40 shadow-[0_0_12px_rgba(255,119,168,0.7)]" />
           <div className="absolute right-6 top-6 h-3 w-10 bg-neon/40 shadow-[0_0_12px_rgba(255,119,168,0.7)]" />
 
-          <div className="absolute right-4 top-4 z-10 flex overflow-hidden rounded-2xl border-2 border-neon bg-[#2a182a]/80 text-[7px] uppercase tracking-[0.3em] text-neon backdrop-blur-md sm:text-[8px]">
-            <button
-              type="button"
-              onClick={() => onSetLang("RU")}
-              className={`pixel-button px-3 py-2 transition-transform hover:scale-105 active:scale-95 will-change-transform ${
-                lang === "RU" ? "bg-neon text-[#2d1b2e]" : ""
-              }`}
-            >
-              RU
-            </button>
-            <button
-              type="button"
-              onClick={() => onSetLang("EN")}
-              className={`pixel-button px-3 py-2 transition-transform hover:scale-105 active:scale-95 will-change-transform ${
-                lang === "EN" ? "bg-neon text-[#2d1b2e]" : ""
-              }`}
-            >
-              EN
-            </button>
+          <div className="z-10 mb-2 flex w-full justify-end sm:absolute sm:right-4 sm:top-4 sm:mb-0 sm:w-auto">
+            <div className="flex overflow-hidden rounded-2xl border-2 border-neon bg-[#2a182a]/80 text-[7px] uppercase tracking-[0.3em] text-neon backdrop-blur-md sm:text-[8px]">
+              <button
+                type="button"
+                onClick={() => onSetLang("RU")}
+                className={`pixel-button px-3 py-2 transition-transform hover:scale-105 active:scale-95 will-change-transform ${
+                  lang === "RU" ? "bg-neon text-[#2d1b2e]" : ""
+                }`}
+              >
+                RU
+              </button>
+              <button
+                type="button"
+                onClick={() => onSetLang("EN")}
+                className={`pixel-button px-3 py-2 transition-transform hover:scale-105 active:scale-95 will-change-transform ${
+                  lang === "EN" ? "bg-neon text-[#2d1b2e]" : ""
+                }`}
+              >
+                EN
+              </button>
+            </div>
           </div>
 
           <div className="mt-6 flex w-full max-w-md flex-col items-center gap-6">

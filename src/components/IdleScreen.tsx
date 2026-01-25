@@ -22,15 +22,19 @@ type IdleScreenProps = {
 
 const quickTags = [
   "LO-FI",
+  "PHONK",
+  "METAL",
   "CHIPTUNE",
   "SYNTHWAVE",
   "AMBIENT",
   "TECHNO",
   "RETRO GAME",
   "JAZZ",
+  "SOUL",
   "PIANO",
   "HIP-HOP",
   "DNB",
+  "K-POP",
 ];
 
 export function IdleScreen({ onStart, labels, lang, onSetLang }: IdleScreenProps) {
@@ -50,25 +54,27 @@ export function IdleScreen({ onStart, labels, lang, onSetLang }: IdleScreenProps
           <div className="absolute left-6 top-6 h-3 w-16 bg-neon/40 shadow-[0_0_12px_rgba(255,119,168,0.7)]" />
           <div className="absolute right-6 top-6 h-3 w-10 bg-neon/40 shadow-[0_0_12px_rgba(255,119,168,0.7)]" />
 
-          <div className="absolute right-4 top-4 z-10 flex overflow-hidden rounded-2xl border-2 border-neon bg-[#2a182a]/80 text-[7px] uppercase tracking-[0.3em] text-neon backdrop-blur-md sm:text-[8px]">
-            <button
-              type="button"
-              onClick={() => onSetLang("RU")}
-              className={`pixel-button px-3 py-2 transition-transform hover:scale-105 active:scale-95 will-change-transform ${
-                lang === "RU" ? "bg-neon text-[#2d1b2e]" : ""
-              }`}
-            >
-              RU
-            </button>
-            <button
-              type="button"
-              onClick={() => onSetLang("EN")}
-              className={`pixel-button px-3 py-2 transition-transform hover:scale-105 active:scale-95 will-change-transform ${
-                lang === "EN" ? "bg-neon text-[#2d1b2e]" : ""
-              }`}
-            >
-              EN
-            </button>
+          <div className="z-10 mb-2 flex w-full justify-end sm:absolute sm:right-4 sm:top-4 sm:mb-0 sm:w-auto">
+            <div className="flex overflow-hidden rounded-2xl border-2 border-neon bg-[#2a182a]/80 text-[7px] uppercase tracking-[0.3em] text-neon backdrop-blur-md sm:text-[8px]">
+              <button
+                type="button"
+                onClick={() => onSetLang("RU")}
+                className={`pixel-button px-3 py-2 transition-transform hover:scale-105 active:scale-95 will-change-transform ${
+                  lang === "RU" ? "bg-neon text-[#2d1b2e]" : ""
+                }`}
+              >
+                RU
+              </button>
+              <button
+                type="button"
+                onClick={() => onSetLang("EN")}
+                className={`pixel-button px-3 py-2 transition-transform hover:scale-105 active:scale-95 will-change-transform ${
+                  lang === "EN" ? "bg-neon text-[#2d1b2e]" : ""
+                }`}
+              >
+                EN
+              </button>
+            </div>
           </div>
 
           <header className="flex w-full flex-col items-center gap-3">
@@ -116,17 +122,21 @@ export function IdleScreen({ onStart, labels, lang, onSetLang }: IdleScreenProps
             <p className="text-[10px] uppercase tracking-[0.35em] text-neon/80 sm:text-xs">
               {labels.quickVibes}
             </p>
-            <div className="flex w-full gap-3 overflow-x-auto pb-2 sm:grid sm:grid-cols-4 sm:gap-3 sm:overflow-visible sm:pb-0">
-              {quickTags.map((tag) => (
-                <button
-                  key={tag}
-                  type="button"
-                  onClick={() => onStart(tag, tag)}
-                  className="pixel-tag shrink-0 rounded-2xl px-4 py-3 text-[9px] uppercase tracking-[0.25em] text-neon transition hover:bg-neon hover:text-[#2d1b2e] hover:scale-105 active:scale-95 will-change-transform sm:text-[10px]"
-                >
-                  {tag}
-                </button>
-              ))}
+            <div className="relative">
+              <div className="pointer-events-none absolute inset-y-0 left-0 z-10 w-6 bg-gradient-to-r from-[var(--background)] to-transparent md:hidden" />
+              <div className="pointer-events-none absolute inset-y-0 right-0 z-10 w-6 bg-gradient-to-l from-[var(--background)] to-transparent md:hidden" />
+              <div className="flex w-full gap-3 overflow-x-auto overflow-y-visible pb-2 sm:grid sm:grid-cols-3 sm:gap-3 sm:pb-0 lg:grid-cols-4 md:overflow-visible">
+                {quickTags.map((tag) => (
+                  <button
+                    key={tag}
+                    type="button"
+                    onClick={() => onStart(tag, tag)}
+                    className="pixel-tag relative shrink-0 rounded-2xl px-3 py-2 text-[9px] uppercase tracking-[0.25em] text-neon transition hover:z-50 hover:bg-neon hover:text-[#2d1b2e] hover:scale-105 active:scale-95 will-change-transform sm:px-4 sm:py-3 sm:text-[10px]"
+                  >
+                    {tag}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
 

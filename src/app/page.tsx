@@ -81,8 +81,8 @@ const translations = {
     EN: "SIGNAL LOCKED!",
   },
   vibeDetail: {
-    RU: "ВАЙБ: {category} | ЧАСТОТА: {genre}",
-    EN: "VIBE: {category} | FREQUENCY: {genre}",
+    RU: "ВАЙБ: {category} | НАСТРОЙКА: {genre}",
+    EN: "VIBE: {category} | TUNING TO: {genre}",
   },
   scanningAirwaves: {
     RU: "СКАНИРУЮ ЭФИР: {tag}....",

@@ -65,8 +65,7 @@ export async function POST(request: NextRequest) {
 
     await ensureBaseUrl();
     const stations = await fetchSecureStationsForTag(tag);
-    const shuffled = [...stations].sort(() => Math.random() - 0.5);
-    return NextResponse.json({ tag, stations: shuffled });
+    return NextResponse.json({ tag, stations });
   } catch (error) {
     console.error("RADIO API ERROR:", error);
     if (error instanceof NoStationsError) {

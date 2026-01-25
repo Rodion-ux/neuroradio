@@ -4,101 +4,58 @@ type VibeCategory = {
 };
 
 const VIBE_MAP: Record<string, VibeCategory> = {
-  STUDY: {
+  GRIND: {
     keywords: [
-      "учусь",
-      "экзамен",
-      "отчет",
-      "диплом",
+      "ебашу",
+      "hard work",
       "дедлайн",
-      "концентрация",
+      "grind",
+      "фигачу",
+      "аврал",
+      "скорость",
+      "burnout",
+    ],
+    genres: ["techno", "phonk", "hardstyle", "industrial", "metal"],
+  },
+  FOCUS: {
+    keywords: [
+      "код",
+      "дебаг",
+      "логика",
+      "пишу",
+      "отчет",
+      "crm",
+      "focus",
       "study",
-      "exam",
-      "homework",
-      "report",
-      "deadline",
+      "учеба",
     ],
-    genres: ["ambient", "lofi", "focus", "classical"],
+    genres: ["minimal techno", "deep house", "liquid dnb", "ambient"],
   },
-  WORK: {
+  CREATIVE: {
     keywords: [
-      "работа",
-      "офис",
-      "звонок",
-      "почта",
-      "задачи",
-      "созвон",
-      "work",
-      "office",
-      "meeting",
-      "email",
-      "tasks",
+      "дизайн",
+      "арт",
+      "фигма",
+      "figma",
+      "рендер",
+      "voxel",
+      "3d",
+      "creative",
     ],
-    genres: ["lounge", "deep house", "jazzhop", "downtempo"],
+    genres: ["chillout", "downtempo", "lofi", "future garage"],
   },
-  CHORES: {
-    keywords: [
-      "уборка",
-      "готовлю",
-      "душ",
-      "дела",
-      "дома",
-      "быт",
-      "cleaning",
-      "cooking",
-      "chores",
-      "home",
-      "house",
-    ],
-    genres: ["funk", "disco", "pop", "electro house"],
-  },
-  SPORT: {
+  ACTION: {
     keywords: [
       "зал",
-      "качаюсь",
+      "уборка",
       "бег",
       "тренировка",
-      "фитнес",
-      "спорт",
       "gym",
       "workout",
-      "run",
-      "training",
+      "дела",
+      "активно",
     ],
-    genres: ["phonk", "techno", "drum and bass", "hardstyle"],
-  },
-  GAMING: {
-    keywords: [
-      "играю",
-      "катка",
-      "стрим",
-      "квест",
-      "гейминг",
-      "win",
-      "game",
-      "play",
-      "gaming",
-      "stream",
-      "quest",
-    ],
-    genres: ["chiptune", "8-bit", "future bass", "synth-pop"],
-  },
-  TRANSIT: {
-    keywords: [
-      "еду",
-      "машина",
-      "метро",
-      "прогулка",
-      "дорога",
-      "night",
-      "drive",
-      "car",
-      "travel",
-      "ride",
-      "bus",
-      "train",
-    ],
-    genres: ["synthwave", "retrowave", "dark wave", "vaporwave"],
+    genres: ["drum and bass", "bass house", "electro house", "energy"],
   },
   RELAX: {
     keywords: [
@@ -110,29 +67,42 @@ const VIBE_MAP: Record<string, VibeCategory> = {
       "чилл",
       "relax",
       "chill",
-      "tired",
-      "evening",
-      "bath",
     ],
-    genres: ["soul", "smooth jazz", "bossa nova", "chillout"],
+    genres: ["soul", "smooth jazz", "bossa nova", "lounge"],
   },
-  ZEN: {
-    keywords: [
-      "сон",
-      "медитация",
-      "тишина",
-      "грущу",
-      "засыпаю",
-      "sleep",
-      "zen",
-      "meditation",
-      "silence",
-      "sleepy",
-      "sad",
-    ],
-    genres: ["dark ambient", "drone", "sleep", "nature"],
+  GAMING: {
+    keywords: ["играю", "катка", "квест", "турнир", "стрим", "play", "gaming"],
+    genres: ["chiptune", "8-bit", "future bass", "synth-pop"],
+  },
+  NIGHT_DRIVE: {
+    keywords: ["еду", "машина", "ночь", "дорога", "night", "drive", "car"],
+    genres: ["synthwave", "vaporwave", "dark wave", "retrowave"],
   },
 };
+
+const GENRE_ALIASES: Array<{ tag: string; aliases: string[] }> = [
+  { tag: "phonk", aliases: ["phonk", "фонк"] },
+  { tag: "hardstyle", aliases: ["hardstyle", "хардстайл"] },
+  { tag: "metal", aliases: ["metal", "метал", "металл"] },
+  { tag: "psytrance", aliases: ["psytrance", "псайтранс", "психотренс"] },
+  { tag: "dubstep", aliases: ["dubstep", "дабстеп", "дубстеп"] },
+  { tag: "liquid dnb", aliases: ["liquid dnb", "liquid drum and bass"] },
+  { tag: "post-rock", aliases: ["post-rock", "post rock", "построк"] },
+  { tag: "deep house", aliases: ["deep house", "deep-house"] },
+  { tag: "progressive", aliases: ["progressive", "прогрессив"] },
+  { tag: "vaporwave", aliases: ["vaporwave", "вейпорвейв"] },
+  { tag: "city pop", aliases: ["city pop", "citypop", "сити поп"] },
+  { tag: "dark ambient", aliases: ["dark ambient", "darkambient", "дарк эмбиент"] },
+  { tag: "k-pop", aliases: ["k-pop", "k pop", "kpop", "кей поп", "кейпоп"] },
+  { tag: "j-pop", aliases: ["j-pop", "j pop", "jpop", "джей поп", "джейпоп"] },
+  { tag: "indie", aliases: ["indie", "инди"] },
+  { tag: "reggae", aliases: ["reggae", "регги"] },
+  { tag: "blues", aliases: ["blues", "блюз"] },
+  { tag: "soul", aliases: ["soul", "соул"] },
+  { tag: "funk", aliases: ["funk", "фанк"] },
+  { tag: "classical", aliases: ["classical", "классика"] },
+  { tag: "bossa nova", aliases: ["bossa nova", "bossanova", "босса нова"] },
+];
 
 const normalizeInput = (value: string) =>
   value
@@ -148,8 +118,48 @@ export const processTextInput = (input: string) => {
   const normalized = normalizeInput(input);
   const words = normalized.split(" ").filter(Boolean);
 
+  const directGenre = GENRE_ALIASES.find(({ aliases }) =>
+    aliases.some((alias) => {
+      if (alias.includes(" ") || alias.includes("-")) {
+        return normalized.includes(alias);
+      }
+      return words.includes(alias);
+    })
+  );
+
+  if (directGenre) {
+    return {
+      category: "DIRECT",
+      genre: directGenre.tag,
+      tag: directGenre.tag,
+    };
+  }
+
   for (const [category, config] of Object.entries(VIBE_MAP)) {
-    if (config.keywords.some((keyword) => normalized.includes(keyword))) {
+    const exactMatch = config.keywords.some((keyword) => {
+      if (keyword.includes(" ")) {
+        return normalized.includes(keyword);
+      }
+      return words.includes(keyword);
+    });
+    if (exactMatch) {
+      const genre = pickRandom(config.genres);
+      return {
+        category,
+        genre,
+        tag: genre,
+      };
+    }
+  }
+
+  for (const [category, config] of Object.entries(VIBE_MAP)) {
+    const partialMatch = config.keywords.some((keyword) => {
+      if (keyword.includes(" ")) {
+        return false;
+      }
+      return words.some((word) => word.includes(keyword));
+    });
+    if (partialMatch) {
       const genre = pickRandom(config.genres);
       return {
         category,
