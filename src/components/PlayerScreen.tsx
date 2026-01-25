@@ -60,12 +60,14 @@ export function PlayerScreen({
   const trackMarqueeDuration = Math.max(10, trackLine.length * 0.5);
   const canCopy = Boolean(trackTitle?.trim());
   const glowColor = accentColor ?? "#ff77a8";
-  const titleStyle: React.CSSProperties = {
+  const titleStyle: React.CSSProperties & { [key: string]: string | number } = {
     filter: `drop-shadow(0 0 12px ${glowColor})`,
   };
+  const trackStyle: React.CSSProperties & { [key: string]: string | number } | undefined =
+    shouldTrackMarquee ? { ["--marquee-duration"]: `${trackMarqueeDuration}s` } : undefined;
 
   if (shouldMarquee) {
-    titleStyle["--marquee-duration" as string] = `${marqueeDuration}s`;
+    titleStyle["--marquee-duration"] = `${marqueeDuration}s`;
   }
 
   useEffect(() => {
@@ -240,11 +242,7 @@ export function PlayerScreen({
                   className={`text-[9px] uppercase tracking-[0.32em] text-neon-bright ${
                     shouldTrackMarquee ? "marquee-track" : ""
                   }`}
-                  style={
-                    shouldTrackMarquee
-                      ? ({ ["--marquee-duration" as string]: `${trackMarqueeDuration}s` } as React.CSSProperties)
-                      : undefined
-                  }
+                  style={trackStyle}
                 >
                   {trackLine}
                   {shouldTrackMarquee ? ` • ${trackLine}` : ""}
