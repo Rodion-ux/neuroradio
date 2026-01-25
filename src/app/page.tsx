@@ -338,7 +338,7 @@ export default function Home() {
     sessionRef.current = sessionId;
     const isQuickTag = Boolean(tagOverride);
     const processed = isQuickTag ? null : processTextInput(userActivity);
-    const initialTag = isQuickTag ? tagOverride : processed?.tag ?? "lofi";
+    const initialTag = (isQuickTag ? tagOverride : processed?.tag) ?? "lofi";
     setStationTag(initialTag.toUpperCase());
     setActiveTag(initialTag);
     setScreen("loading");
