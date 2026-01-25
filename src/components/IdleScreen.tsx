@@ -44,24 +44,28 @@ export function IdleScreen({ onStart, labels, lang, onSetLang }: IdleScreenProps
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4 py-10">
-      <div className="crt-shell w-full max-w-5xl">
-        <div className="crt-screen crt-text crt-life relative flex flex-col items-center gap-10 px-6 py-10 text-center sm:px-12">
+      <div className="crt-shell w-full max-w-5xl rounded-3xl">
+        <div className="crt-screen crt-text crt-life relative flex flex-col items-center gap-10 rounded-3xl px-6 py-10 text-center sm:px-12">
           <BackgroundFx />
           <div className="absolute left-6 top-6 h-3 w-16 bg-neon/40 shadow-[0_0_12px_rgba(255,119,168,0.7)]" />
           <div className="absolute right-6 top-6 h-3 w-10 bg-neon/40 shadow-[0_0_12px_rgba(255,119,168,0.7)]" />
 
-          <div className="absolute right-4 top-4 z-10 flex overflow-hidden rounded border-2 border-neon bg-[#2a182a] text-[7px] uppercase tracking-[0.3em] text-neon sm:text-[8px]">
+          <div className="absolute right-4 top-4 z-10 flex overflow-hidden rounded-2xl border-2 border-neon bg-[#2a182a]/80 text-[7px] uppercase tracking-[0.3em] text-neon backdrop-blur-md sm:text-[8px]">
             <button
               type="button"
               onClick={() => onSetLang("RU")}
-              className={`px-2 py-1 ${lang === "RU" ? "bg-neon text-[#2d1b2e]" : ""}`}
+              className={`pixel-button px-3 py-2 transition-transform hover:scale-105 active:scale-95 will-change-transform ${
+                lang === "RU" ? "bg-neon text-[#2d1b2e]" : ""
+              }`}
             >
               RU
             </button>
             <button
               type="button"
               onClick={() => onSetLang("EN")}
-              className={`px-2 py-1 ${lang === "EN" ? "bg-neon text-[#2d1b2e]" : ""}`}
+              className={`pixel-button px-3 py-2 transition-transform hover:scale-105 active:scale-95 will-change-transform ${
+                lang === "EN" ? "bg-neon text-[#2d1b2e]" : ""
+              }`}
             >
               EN
             </button>
@@ -96,13 +100,13 @@ export function IdleScreen({ onStart, labels, lang, onSetLang }: IdleScreenProps
               value={activity}
               onChange={(e) => setActivity(e.target.value)}
               placeholder={labels.placeholder}
-              className="pixel-input w-full rounded-none border-2 border-neon bg-[#2a182a] px-4 py-4 text-[10px] uppercase tracking-[0.25em] text-neon outline-none transition focus:border-neon-bright focus:ring-2 focus:ring-neon-bright sm:text-xs"
+              className="pixel-input w-full rounded-2xl border-2 border-neon bg-black/40 px-4 py-4 text-[10px] uppercase tracking-[0.28em] text-neon outline-none backdrop-blur-md transition focus:border-neon-bright focus:ring-2 focus:ring-neon-bright sm:text-xs"
               autoComplete="off"
             />
 
             <button
               type="submit"
-              className="pixel-button mt-2 w-full max-w-[240px] border-2 border-neon bg-[#2a182a] px-4 py-3 text-[10px] uppercase tracking-[0.35em] text-neon transition hover:bg-neon hover:text-[#2d1b2e] sm:px-6 sm:py-4 sm:text-xs"
+              className="pixel-button mt-2 w-full max-w-[240px] rounded-2xl border-2 border-neon bg-black/40 px-6 py-4 text-[10px] uppercase tracking-[0.35em] text-neon backdrop-blur-md transition hover:bg-neon hover:text-[#2d1b2e] hover:scale-105 active:scale-95 will-change-transform sm:px-7 sm:py-4 sm:text-xs"
             >
               {labels.startButton}
             </button>
@@ -112,13 +116,13 @@ export function IdleScreen({ onStart, labels, lang, onSetLang }: IdleScreenProps
             <p className="text-[10px] uppercase tracking-[0.35em] text-neon/80 sm:text-xs">
               {labels.quickVibes}
             </p>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <div className="flex w-full gap-3 overflow-x-auto pb-2 sm:grid sm:grid-cols-4 sm:gap-3 sm:overflow-visible sm:pb-0">
               {quickTags.map((tag) => (
                 <button
                   key={tag}
                   type="button"
                   onClick={() => onStart(tag, tag)}
-                  className="pixel-tag text-[9px] uppercase tracking-[0.25em] text-neon transition hover:bg-neon hover:text-[#2d1b2e] sm:text-[10px]"
+                  className="pixel-tag shrink-0 rounded-2xl px-4 py-3 text-[9px] uppercase tracking-[0.25em] text-neon transition hover:bg-neon hover:text-[#2d1b2e] hover:scale-105 active:scale-95 will-change-transform sm:text-[10px]"
                 >
                   {tag}
                 </button>
@@ -126,10 +130,10 @@ export function IdleScreen({ onStart, labels, lang, onSetLang }: IdleScreenProps
             </div>
           </div>
 
-          <div className="pointer-events-none absolute bottom-6 left-10 pixel-heart" />
-          <div className="pointer-events-none absolute bottom-10 right-16 pixel-heart" />
-          <div className="pointer-events-none absolute top-20 right-12 pixel-sparkle" />
-          <div className="pointer-events-none absolute top-24 left-16 pixel-sparkle" />
+          <div className="pointer-events-none absolute bottom-6 left-10 pixel-heart will-change-transform" />
+          <div className="pointer-events-none absolute bottom-10 right-16 pixel-heart will-change-transform" />
+          <div className="pointer-events-none absolute top-20 right-12 pixel-sparkle will-change-transform" />
+          <div className="pointer-events-none absolute top-24 left-16 pixel-sparkle will-change-transform" />
 
           <div className="pointer-events-none absolute bottom-4 right-6 text-[8px] text-neon/60 sm:text-[10px]">
             v0.1 BETA

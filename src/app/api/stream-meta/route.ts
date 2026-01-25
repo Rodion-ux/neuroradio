@@ -90,7 +90,9 @@ export async function GET(request: NextRequest) {
     await reader.cancel();
 
     const metadata = new TextDecoder("utf-8").decode(metaBytes);
-    const match = /StreamTitle='([^']*)'/.exec(metadata);
+    const match =
+      /StreamTitle='([^']*)'/.exec(metadata) ??
+      /StreamTitle="([^"]*)"/.exec(metadata);
     const title = match?.[1]?.trim() ?? "";
 
     return NextResponse.json({ title: title.length ? title : null });

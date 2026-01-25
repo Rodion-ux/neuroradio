@@ -1,6 +1,8 @@
 "use client";
 
+import { AnimatePresence, motion } from "framer-motion";
 import Image from "next/image";
+import { useEffect, useRef, useState } from "react";
 import { AudioWave } from "./AudioWave";
 import { BackgroundFx } from "./BackgroundFx";
 
@@ -20,10 +22,13 @@ type PlayerScreenProps = {
     genre: string;
     liveStream: string;
     stop: string;
+    trackFallback: string;
+    copied: string;
   };
   lang: "RU" | "EN";
   onSetLang: (lang: "RU" | "EN") => void;
   audioLevelRef?: React.MutableRefObject<number>;
+  accentColor?: string;
 };
 
 export function PlayerScreen({
@@ -41,34 +46,73 @@ export function PlayerScreen({
   lang,
   onSetLang,
   audioLevelRef,
+  accentColor,
 }: PlayerScreenProps) {
+  const [copied, setCopied] = useState(false);
+  const copyTimeoutRef = useRef<number | null>(null);
   const primaryTitle = (stationName || "SEARCHING...").toUpperCase();
   const shouldMarquee = primaryTitle.length > 18;
   const marqueeDuration = Math.max(12, primaryTitle.length * 0.6);
   const tagLabel = currentTag.toUpperCase();
-  const trackLine = trackTitle ? trackTitle.toUpperCase() : "";
+  const trackDisplay = trackTitle?.trim() ? trackTitle : labels.trackFallback;
+  const trackLine = trackDisplay.toUpperCase();
   const shouldTrackMarquee = trackLine.length > 24;
   const trackMarqueeDuration = Math.max(10, trackLine.length * 0.5);
+  const canCopy = Boolean(trackTitle?.trim());
+  const glowColor = accentColor ?? "#ff77a8";
+  const titleStyle: React.CSSProperties = {
+    filter: `drop-shadow(0 0 12px ${glowColor})`,
+  };
+
+  if (shouldMarquee) {
+    titleStyle["--marquee-duration" as string] = `${marqueeDuration}s`;
+  }
+
+  useEffect(() => {
+    return () => {
+      if (copyTimeoutRef.current) {
+        window.clearTimeout(copyTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const handleCopy = async () => {
+    if (!canCopy) return;
+    try {
+      await navigator.clipboard.writeText(trackTitle!.trim());
+      setCopied(true);
+      if (copyTimeoutRef.current) {
+        window.clearTimeout(copyTimeoutRef.current);
+      }
+      copyTimeoutRef.current = window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setCopied(false);
+    }
+  };
 
   return (
     <div className={`flex min-h-screen items-center justify-center bg-background px-4 py-10 ${isPlaying ? "neon-breathe" : ""}`}>
-      <div className="crt-shell w-full max-w-5xl">
-        <div className="crt-screen crt-text crt-life relative flex flex-col items-center gap-10 px-6 py-10 text-center text-neon sm:px-12">
+      <div className="crt-shell w-full max-w-5xl rounded-3xl">
+        <div className="crt-screen crt-text crt-life relative flex flex-col items-center gap-10 rounded-3xl px-6 py-10 text-center text-neon sm:px-12">
           <BackgroundFx />
           <div className="absolute left-6 top-6 h-3 w-16 bg-neon/40 shadow-[0_0_12px_rgba(255,119,168,0.7)]" />
           <div className="absolute right-6 top-6 h-3 w-10 bg-neon/40 shadow-[0_0_12px_rgba(255,119,168,0.7)]" />
-          <div className="absolute right-4 top-4 z-10 flex overflow-hidden rounded border-2 border-neon bg-[#2a182a] text-[7px] uppercase tracking-[0.3em] text-neon sm:text-[8px]">
+          <div className="absolute right-4 top-4 z-10 flex overflow-hidden rounded-2xl border-2 border-neon bg-[#2a182a]/80 text-[7px] uppercase tracking-[0.3em] text-neon backdrop-blur-md sm:text-[8px]">
             <button
               type="button"
               onClick={() => onSetLang("RU")}
-              className={`px-2 py-1 ${lang === "RU" ? "bg-neon text-[#2d1b2e]" : ""}`}
+              className={`pixel-button px-3 py-2 transition-transform hover:scale-105 active:scale-95 will-change-transform ${
+                lang === "RU" ? "bg-neon text-[#2d1b2e]" : ""
+              }`}
             >
               RU
             </button>
             <button
               type="button"
               onClick={() => onSetLang("EN")}
-              className={`px-2 py-1 ${lang === "EN" ? "bg-neon text-[#2d1b2e]" : ""}`}
+              className={`pixel-button px-3 py-2 transition-transform hover:scale-105 active:scale-95 will-change-transform ${
+                lang === "EN" ? "bg-neon text-[#2d1b2e]" : ""
+              }`}
             >
               EN
             </button>
@@ -91,11 +135,7 @@ export function PlayerScreen({
                 className={`title-3d glow-pulse text-[12px] uppercase tracking-[0.35em] text-neon-bright sm:text-base ${
                   shouldMarquee ? "marquee-track" : ""
                 }`}
-                style={
-                  shouldMarquee
-                    ? ({ ["--marquee-duration" as string]: `${marqueeDuration}s` } as React.CSSProperties)
-                    : undefined
-                }
+                style={titleStyle}
               >
                 {primaryTitle} {shouldMarquee ? " • " + primaryTitle : ""}
               </p>
@@ -106,16 +146,23 @@ export function PlayerScreen({
 
             <div className="mt-2 flex w-full items-center justify-center">
               <div
-                className={`pixel-scene relative flex h-52 w-full max-w-2xl items-center justify-center border-2 border-neon bg-[#2a182a] sm:h-64 ${
-                  isPlaying ? "scene-pulse" : ""
+                className={`pixel-scene relative flex h-52 w-full max-w-2xl items-center justify-center rounded-3xl border-2 border-neon bg-[#2a182a] sm:h-64 ${
+                  isPlaying ? "scene-pulse animate-pulse" : ""
                 }`}
+                style={
+                  isPlaying
+                    ? {
+                        boxShadow: `0 0 26px ${glowColor}66, 0 0 60px ${glowColor}33`,
+                      }
+                    : undefined
+                }
               >
                 <div className="pixel-sun" />
                 <div className="pixel-grid" />
                 <div
                   className={`pixel-visualizer ${
                     isPlaying ? "visualizer-active" : "visualizer-muted"
-                  } absolute bottom-8 flex h-24 w-full items-center justify-center px-0 sm:h-28`}
+                  } absolute bottom-8 flex h-24 w-full items-center justify-center rounded-2xl px-0 sm:h-28`}
                 >
                   <AudioWave
                     isPlaying={isPlaying}
@@ -125,6 +172,10 @@ export function PlayerScreen({
                     levelRef={audioLevelRef}
                   />
                 </div>
+                <div className="pointer-events-none absolute right-6 top-6 flex items-center gap-2 text-[8px] uppercase tracking-[0.3em] text-neon sm:text-[9px]">
+                  <span className="h-2 w-2 animate-pulse rounded-full bg-neon-bright" />
+                  {labels.liveStream}
+                </div>
               </div>
             </div>
 
@@ -132,7 +183,7 @@ export function PlayerScreen({
               <button
                 type="button"
                 onClick={onPrevStation}
-                className="pixel-button flex h-11 w-11 items-center justify-center border-2 border-neon bg-[#2a182a] sm:h-12 sm:w-12"
+                className="pixel-button flex h-12 w-12 items-center justify-center rounded-2xl border-2 border-neon bg-black/40 backdrop-blur-md transition-transform hover:scale-105 active:scale-95 will-change-transform sm:h-12 sm:w-12"
               >
                 <Image
                   src="/icon-prev.svg"
@@ -146,7 +197,7 @@ export function PlayerScreen({
               <button
                 type="button"
                 onClick={onTogglePlay}
-                className="pixel-button flex h-12 w-12 items-center justify-center border-2 border-neon bg-[#2a182a] sm:h-14 sm:w-14"
+                className="pixel-button flex h-14 w-14 items-center justify-center rounded-2xl border-2 border-neon bg-black/40 backdrop-blur-md transition-transform hover:scale-105 active:scale-95 will-change-transform sm:h-14 sm:w-14"
               >
                 <Image
                   src={isPlaying ? "/icon-pause.svg" : "/icon-play.svg"}
@@ -160,7 +211,7 @@ export function PlayerScreen({
               <button
                 type="button"
                 onClick={onNextStation}
-                className="pixel-button flex h-11 w-11 items-center justify-center border-2 border-neon bg-[#2a182a] sm:h-12 sm:w-12"
+                className="pixel-button flex h-12 w-12 items-center justify-center rounded-2xl border-2 border-neon bg-black/40 backdrop-blur-md transition-transform hover:scale-105 active:scale-95 will-change-transform sm:h-12 sm:w-12"
               >
                 <Image
                   src="/icon-next.svg"
@@ -171,49 +222,62 @@ export function PlayerScreen({
                   priority
                 />
               </button>
-              <div className="pixel-button flex h-11 items-center gap-2 border-2 border-neon bg-[#2a182a] px-3 text-[8px] text-neon sm:h-12 sm:px-4 sm:text-[10px]">
-                <span className="flex items-center gap-2">
-                  <span className="h-2 w-2 animate-pulse rounded-full bg-neon-bright" />
-                  {labels.liveStream}
-                </span>
-              </div>
             </div>
 
-            {trackTitle && (
-              <div className="mt-4 w-full max-w-2xl">
-                <div className={shouldTrackMarquee ? "marquee" : ""}>
-                  <p
-                    className={`text-[9px] uppercase tracking-[0.3em] text-neon-bright ${
-                      shouldTrackMarquee ? "marquee-track" : ""
-                    }`}
-                    style={
-                      shouldTrackMarquee
-                        ? ({ ["--marquee-duration" as string]: `${trackMarqueeDuration}s` } as React.CSSProperties)
-                        : undefined
-                    }
-                  >
-                    {trackLine}
-                    {shouldTrackMarquee ? ` • ${trackLine}` : ""}
-                  </p>
-                </div>
+            <button
+              type="button"
+              onClick={handleCopy}
+              disabled={!canCopy}
+              className={`relative mt-4 w-full max-w-2xl rounded-2xl border-2 border-neon bg-black/40 px-4 py-3 text-center backdrop-blur-md transition-transform will-change-transform ${
+                canCopy ? "hover:scale-105 active:scale-95" : "cursor-default opacity-80"
+              }`}
+              aria-label={trackLine}
+            >
+              <div className={shouldTrackMarquee ? "marquee" : ""}>
+                <p
+                  className={`text-[9px] uppercase tracking-[0.32em] text-neon-bright ${
+                    shouldTrackMarquee ? "marquee-track" : ""
+                  }`}
+                  style={
+                    shouldTrackMarquee
+                      ? ({ ["--marquee-duration" as string]: `${trackMarqueeDuration}s` } as React.CSSProperties)
+                      : undefined
+                  }
+                >
+                  {trackLine}
+                  {shouldTrackMarquee ? ` • ${trackLine}` : ""}
+                </p>
               </div>
-            )}
+              <AnimatePresence>
+                {copied && (
+                  <motion.span
+                    initial={{ opacity: 0, y: 6, scale: 0.9 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: -6, scale: 0.95 }}
+                    transition={{ duration: 0.2 }}
+                    className="pointer-events-none absolute right-3 top-2 text-[8px] uppercase tracking-[0.3em] text-neon-bright"
+                  >
+                    {labels.copied}
+                  </motion.span>
+                )}
+              </AnimatePresence>
+            </button>
 
             <button
               type="button"
               onClick={onStop}
-              className="pixel-button mt-4 w-full max-w-[180px] border-2 border-neon bg-[#2a182a] px-4 py-3 text-[10px] uppercase tracking-[0.35em] text-neon transition hover:bg-neon hover:text-[#2d1b2e] sm:px-6 sm:py-4 sm:text-xs"
+              className="pixel-button mt-4 w-full max-w-[200px] rounded-2xl border-2 border-neon bg-black/40 px-6 py-4 text-[10px] uppercase tracking-[0.35em] text-neon backdrop-blur-md transition hover:bg-neon hover:text-[#2d1b2e] hover:scale-105 active:scale-95 will-change-transform sm:px-6 sm:py-4 sm:text-xs"
             >
               {labels.stop}
             </button>
 
             {statusText && (
-              <p className="text-[8px] uppercase tracking-[0.25em] text-neon/70 sm:text-[10px]">
+              <p className="text-[9px] uppercase tracking-[0.3em] text-neon/70 sm:text-[10px]">
                 {statusText}
               </p>
             )}
             {statusDetail && (
-              <p className="text-[7px] uppercase tracking-[0.25em] text-neon/50 sm:text-[9px]">
+              <p className="text-[8px] uppercase tracking-[0.3em] text-neon/50 sm:text-[9px]">
                 {statusDetail}
               </p>
             )}
@@ -221,12 +285,12 @@ export function PlayerScreen({
 
           {isPlaying && (
             <div className="pointer-events-none absolute inset-0 overflow-hidden">
-              <span className="pixel-note note-left-1" />
-              <span className="pixel-note note-left-2" />
-              <span className="pixel-note note-left-3" />
-              <span className="pixel-note note-right-1" />
-              <span className="pixel-note note-right-2" />
-              <span className="pixel-note note-right-3" />
+              <span className="pixel-note note-left-1 will-change-transform" />
+              <span className="pixel-note note-left-2 will-change-transform" />
+              <span className="pixel-note note-left-3 will-change-transform" />
+              <span className="pixel-note note-right-1 will-change-transform" />
+              <span className="pixel-note note-right-2 will-change-transform" />
+              <span className="pixel-note note-right-3 will-change-transform" />
             </div>
           )}
 

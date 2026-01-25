@@ -19,6 +19,26 @@ type Station = {
   country?: string;
 };
 
+const resolveAccentColor = (tag: string) => {
+  const value = tag.toLowerCase();
+  if (value.includes("synth") || value.includes("retro") || value.includes("wave")) {
+    return "#6bf3ff";
+  }
+  if (value.includes("ambient") || value.includes("zen") || value.includes("sleep")) {
+    return "#7aa8ff";
+  }
+  if (value.includes("techno") || value.includes("dnb") || value.includes("drum")) {
+    return "#b67bff";
+  }
+  if (value.includes("phonk") || value.includes("hardstyle")) {
+    return "#5bff87";
+  }
+  if (value.includes("jazz") || value.includes("piano") || value.includes("soul")) {
+    return "#ffc774";
+  }
+  return "#ff77a8";
+};
+
 const translations = {
   placeholder: {
     RU: "ЧТО ТЫ СЕЙЧАС ДЕЛАЕШЬ?",
@@ -115,6 +135,14 @@ const translations = {
   cancel: {
     RU: "ОТМЕНА",
     EN: "CANCEL",
+  },
+  trackFallback: {
+    RU: "ПОДКЛЮЧАЙСЯ...",
+    EN: "TUNE IN...",
+  },
+  copied: {
+    RU: "[ СКОПИРОВАНО! ]",
+    EN: "[ COPIED! ]",
   },
 } as const;
 
@@ -583,10 +611,13 @@ export default function Home() {
           genre: t("genre"),
           liveStream: t("liveStream"),
           stop: t("stopButton"),
+          trackFallback: t("trackFallback"),
+          copied: t("copied"),
         }}
         lang={lang}
         onSetLang={setLangValue}
         audioLevelRef={audioLevelRef}
+        accentColor={resolveAccentColor(activeTag)}
       />
     );
   }
