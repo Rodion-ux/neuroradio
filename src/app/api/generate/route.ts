@@ -88,12 +88,12 @@ const fetchSecureStationsForTag = async (tag: string) => {
       const query = {
         tag,
         limit: 20,
-        order: "clickcount",
+        order: "clickCount" as const,
         reverse: true,
         hideBroken: false,
         lastcheckok: 1,
       };
-      return radioBrowser.searchStations(query as typeof query & { lastcheckok: number });
+      return radioBrowser.searchStations(query as any);
     });
     const secure = normalizeStations(stations);
     if (secure.length) {
