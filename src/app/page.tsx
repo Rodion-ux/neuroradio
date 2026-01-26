@@ -148,6 +148,10 @@ const translations = {
     RU: "СКАНИРУЮ ЭФИР: {tag}....",
     EN: "SCANNING AIRWAVES: {tag}....",
   },
+  instantConnection: {
+    RU: "МГНОВЕННОЕ ПОДКЛЮЧЕНИЕ",
+    EN: "INSTANT CONNECTION",
+  },
   searching: {
     RU: "ПОИСК...",
     EN: "SEARCHING...",
@@ -155,6 +159,10 @@ const translations = {
   unknownStation: {
     RU: "НЕИЗВЕСТНАЯ СТАНЦИЯ",
     EN: "UNKNOWN STATION",
+  },
+  stationAddedToCollection: {
+    RU: "СТАНЦИЯ ДОБАВЛЕНА В ВАШУ КОЛЛЕКЦИЮ",
+    EN: "STATION ADDED TO YOUR COLLECTION",
   },
   tagLine: {
     RU: "АДАПТИВНОЕ НЕЙРО-РАДИО",
@@ -257,8 +265,146 @@ export default function Home() {
   const volumeFadeRef = useRef<number | null>(null);
   const lastAudibleVolumeRef = useRef(0.7);
   const streamTimeoutRef = useRef<number | null>(null);
+  const isSwitchingRef = useRef(false);
+  const stalledTimeoutRef = useRef<number | null>(null);
+  const preloadedStationsRef = useRef<Station[]>([]);
+  const preloadInProgressRef = useRef(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const isLoadingRef = useRef(false);
+  const audioEventHandlersRef = useRef<{
+    handlePlay?: () => void;
+    handlePause?: () => void;
+    handleError?: () => void;
+    handleStalled?: () => void;
+    handlePlaying?: () => void;
+    handleCanplay?: () => void;
+    handleLoadstart?: () => void;
+  }>({});
 
   const isMuted = volume === 0;
+
+  // Функции для работы с кэшем станций в localStorage
+  const CACHE_KEY_PREFIX = "neuro_radio_cache_";
+  const MAX_CACHED_STATIONS = 5; // Максимум 5 станций на жанр
+
+  const getCachedStations = (genre: string): Station[] => {
+    try {
+      const key = `${CACHE_KEY_PREFIX}${genre.toLowerCase()}`;
+      const cached = localStorage.getItem(key);
+      if (!cached) return [];
+      const stations = JSON.parse(cached) as Station[];
+      return Array.isArray(stations) ? stations : [];
+    } catch (error) {
+      console.warn("Failed to read cached stations:", error);
+      return [];
+    }
+  };
+
+  const saveStationToCache = (station: Station, genre: string) => {
+    try {
+      const key = `${CACHE_KEY_PREFIX}${genre.toLowerCase()}`;
+      const cached = getCachedStations(genre);
+      
+      // Удаляем станцию, если она уже есть в кэше (чтобы переместить её в начало)
+      const filtered = cached.filter(s => s.urlResolved !== station.urlResolved);
+      
+      // Добавляем новую станцию в начало
+      const updated = [station, ...filtered].slice(0, MAX_CACHED_STATIONS);
+      
+      localStorage.setItem(key, JSON.stringify(updated));
+      console.log(`Cached station "${station.name}" for genre "${genre}"`);
+    } catch (error) {
+      console.warn("Failed to save station to cache:", error);
+    }
+  };
+
+  const removeStationFromCache = (url: string, genre: string) => {
+    try {
+      const key = `${CACHE_KEY_PREFIX}${genre.toLowerCase()}`;
+      const cached = getCachedStations(genre);
+      const filtered = cached.filter(s => s.urlResolved !== url);
+      localStorage.setItem(key, JSON.stringify(filtered));
+      console.log(`Removed station from cache for genre "${genre}"`);
+    } catch (error) {
+      console.warn("Failed to remove station from cache:", error);
+    }
+  };
+
+  // Функции для работы с verifiedStations (проверенные станции, проигранные >40 сек)
+  const VERIFIED_STATIONS_KEY = "neuro_radio_verified_stations";
+  const playedInSessionRef = useRef<Set<string>>(new Set()); // URL станций, проигранных в текущей сессии
+
+  const getVerifiedStations = (genre: string): Station[] => {
+    try {
+      const cached = localStorage.getItem(VERIFIED_STATIONS_KEY);
+      if (!cached) return [];
+      const allVerified = JSON.parse(cached) as Record<string, Station[]>;
+      const genreKey = genre.toLowerCase();
+      return Array.isArray(allVerified[genreKey]) ? allVerified[genreKey] : [];
+    } catch (error) {
+      console.warn("Failed to read verified stations:", error);
+      return [];
+    }
+  };
+
+  const saveVerifiedStation = (station: Station, genre: string) => {
+    try {
+      const cached = localStorage.getItem(VERIFIED_STATIONS_KEY);
+      const allVerified: Record<string, Station[]> = cached ? JSON.parse(cached) : {};
+      const genreKey = genre.toLowerCase();
+      
+      if (!Array.isArray(allVerified[genreKey])) {
+        allVerified[genreKey] = [];
+      }
+      
+      // Удаляем дубликаты по URL
+      const filtered = allVerified[genreKey].filter(s => s.urlResolved !== station.urlResolved);
+      
+      // Добавляем новую станцию в начало
+      allVerified[genreKey] = [station, ...filtered];
+      
+      localStorage.setItem(VERIFIED_STATIONS_KEY, JSON.stringify(allVerified));
+      console.log(`Verified station "${station.name}" saved for genre "${genre}"`);
+      
+      // Показываем визуальный фидбек
+      setStatusText(t("stationAddedToCollection"));
+      // Очищаем сообщение через 3 секунды
+      setTimeout(() => {
+        setStatusText((prev) => {
+          // Очищаем только если это все еще наше сообщение
+          if (prev === t("stationAddedToCollection")) {
+            return undefined;
+          }
+          return prev;
+        });
+      }, 3000);
+    } catch (error) {
+      console.warn("Failed to save verified station:", error);
+    }
+  };
+
+  const removeVerifiedStation = (url: string, genre: string) => {
+    try {
+      const cached = localStorage.getItem(VERIFIED_STATIONS_KEY);
+      if (!cached) return;
+      const allVerified = JSON.parse(cached) as Record<string, Station[]>;
+      const genreKey = genre.toLowerCase();
+      
+      if (Array.isArray(allVerified[genreKey])) {
+        allVerified[genreKey] = allVerified[genreKey].filter(s => s.urlResolved !== url);
+        localStorage.setItem(VERIFIED_STATIONS_KEY, JSON.stringify(allVerified));
+        console.log(`Removed verified station for genre "${genre}"`);
+      }
+    } catch (error) {
+      console.warn("Failed to remove verified station:", error);
+    }
+  };
+
+  const getUnplayedVerifiedStations = (genre: string): Station[] => {
+    const verified = getVerifiedStations(genre);
+    // Фильтруем станции, которые еще не были проиграны в текущей сессии
+    return verified.filter(s => !playedInSessionRef.current.has(s.urlResolved));
+  };
 
   const t = (key: TranslationKey) => translations[key][lang];
   const format = (key: TranslationKey, params: Record<string, string>) => {
@@ -307,6 +453,53 @@ export default function Home() {
     activeTagRef.current = activeTag;
   }, [activeTag]);
 
+  // Таймер для сохранения станции в verifiedStations после 40 секунд воспроизведения
+  const verificationTimerRef = useRef<number | null>(null);
+  const currentStationUrlRef = useRef<string | null>(null);
+  
+  useEffect(() => {
+    // Очищаем предыдущий таймер при смене станции или остановке
+    if (verificationTimerRef.current) {
+      window.clearTimeout(verificationTimerRef.current);
+      verificationTimerRef.current = null;
+    }
+    
+    // Запускаем таймер только если станция играет
+    if (playbackState === "playing" && activeStationUrlRef.current && activeTagRef.current) {
+      const currentStation = stationsRef.current[stationIndexRef.current];
+      
+      if (currentStation && currentStation.urlResolved === activeStationUrlRef.current) {
+        // Сохраняем URL текущей станции для проверки в таймере
+        currentStationUrlRef.current = currentStation.urlResolved;
+        
+        // Запускаем таймер на 40 секунд
+        verificationTimerRef.current = window.setTimeout(() => {
+          // Проверяем, что станция все еще играет и это та же станция
+          if (
+            playbackState === "playing" &&
+            activeStationUrlRef.current === currentStationUrlRef.current &&
+            activeTagRef.current
+          ) {
+            // Сохраняем станцию в verifiedStations
+            saveVerifiedStation(currentStation, activeTagRef.current);
+          }
+          verificationTimerRef.current = null;
+        }, 40000); // 40 секунд
+      } else {
+        currentStationUrlRef.current = null;
+      }
+    } else {
+      currentStationUrlRef.current = null;
+    }
+    
+    return () => {
+      if (verificationTimerRef.current) {
+        window.clearTimeout(verificationTimerRef.current);
+        verificationTimerRef.current = null;
+      }
+    };
+  }, [playbackState, stationIndex, activeTag, stations]);
+
   const fadeToVolume = (target: number) => {
     const audio = audioRef.current;
     if (!audio) return;
@@ -352,93 +545,275 @@ export default function Home() {
   }, [isConnecting]);
 
   const handleStreamError = async (reason?: string) => {
-    const list = stationsRef.current;
-    if (!list.length) return;
+    // НЕ блокируем если уже идет переключение - это нормально при автоматическом skip
+    // Блокируем только если это повторный вызов для той же ошибки
+    if (isSwitchingRef.current && failedCountRef.current > 0) {
+      return;
+    }
+    
+    // Защита от бесконечного цикла: если слишком много ошибок подряд, останавливаемся
+    if (failedCountRef.current >= 10) {
+      console.error("Too many consecutive errors, stopping recovery attempts");
+      setStatusText(t("statusNoStations"));
+      setPlaybackState("blocked");
+      isSwitchingRef.current = false;
+      return;
+    }
+    
+    isSwitchingRef.current = true;
     failedCountRef.current += 1;
     
+    // Удаляем нерабочую станцию из кэша и verifiedStations
+    const currentStation = stationsRef.current[stationIndexRef.current];
+    if (currentStation && activeTagRef.current) {
+      removeStationFromCache(currentStation.urlResolved, activeTagRef.current);
+      removeVerifiedStation(currentStation.urlResolved, activeTagRef.current);
+    }
+    
+    // Clear all timeouts
+    if (stalledTimeoutRef.current) {
+      window.clearTimeout(stalledTimeoutRef.current);
+      stalledTimeoutRef.current = null;
+    }
+    
     if (audioRef.current) {
+      // НЕ очищаем src сразу - даем браузеру время обработать ошибку
+      // Очистка произойдет при создании нового элемента в startStationPlayback
       audioRef.current.pause();
-      audioRef.current.src = "";
+      // Не очищаем src здесь, чтобы не мешать обработке ошибок
     }
     
     if (reason === "stream timeout") {
       setStatusText(t("statusStationUnstable"));
-      setStatusDetail("Timeout: Station not responding");
+      setStatusDetail(undefined); // Не показываем технические детали пользователю
     } else {
       setStatusText(t("statusSignalLost"));
-      if (reason) {
-        setStatusDetail(reason);
-      }
+      setStatusDetail(undefined); // Не показываем технические детали пользователю
     }
 
-    if (failedCountRef.current >= list.length) {
-      try {
-        const { stations: refreshed } = await fetchStations(
-          activeTagRef.current ?? "lofi"
-        );
-        if (!refreshed.length) {
-          setStatusText(t("statusNoStations"));
-          setPlaybackState("blocked");
+    try {
+      // Always fetch new stations when current one fails
+      // This guarantees a fresh random station on each error
+      const { stations: refreshed } = await fetchStations(
+        activeTagRef.current ?? "lofi",
+        true // useRandomOrder = true for random selection
+      );
+      
+      if (!refreshed.length) {
+        // If fetch failed, try fallback to next in existing list
+        const list = stationsRef.current;
+        if (list.length > 0 && failedCountRef.current < list.length * 2) {
+          const nextIndex = (stationIndexRef.current + 1) % list.length;
+          await startStationPlayback(nextIndex);
+          isSwitchingRef.current = false;
           return;
         }
-        setStations(refreshed);
-        stationsRef.current = refreshed;
-        failedCountRef.current = 0;
-        const randomIndex = Math.floor(Math.random() * refreshed.length);
-        await startStationPlayback(randomIndex);
-        return;
-      } catch {
         setStatusText(t("statusNoStations"));
         setPlaybackState("blocked");
+        isSwitchingRef.current = false;
         return;
       }
+      
+      // Update stations list and play random new station
+      setStations(refreshed);
+      stationsRef.current = refreshed;
+      failedCountRef.current = 0; // Сбрасываем счетчик при успешном переключении
+      const randomIndex = Math.floor(Math.random() * refreshed.length);
+      await startStationPlayback(randomIndex);
+    } catch (error) {
+      // Игнорируем ошибки отмены запроса
+      if (error instanceof Error && error.name === 'AbortError') {
+        console.log("Request was aborted during stream error recovery");
+        isSwitchingRef.current = false;
+        return;
+      }
+      console.error("Failed to fetch new stations on error:", error);
+      // Fallback to next in existing list if fetch fails
+      const list = stationsRef.current;
+      if (list.length > 0 && failedCountRef.current < list.length * 2) {
+        const nextIndex = (stationIndexRef.current + 1) % list.length;
+        await startStationPlayback(nextIndex);
+      } else {
+        setStatusText(t("statusNoStations"));
+        setPlaybackState("blocked");
+      }
+    } finally {
+      isSwitchingRef.current = false;
     }
-
-    const nextIndex = (stationIndexRef.current + 1) % list.length;
-    await startStationPlayback(nextIndex);
   };
 
   const setupAudio = (audio: HTMLAudioElement) => {
-    if (audioReadyRef.current) return;
-    audioReadyRef.current = true;
+    // Если уже настроено для этого аудио элемента, нужно перерегистрировать обработчики
+    // createMediaElementSource можно вызвать только один раз для каждого элемента
+    if (audioReadyRef.current) {
+      // Удаляем старые обработчики перед регистрацией новых
+      const oldHandlers = audioEventHandlersRef.current;
+      if (oldHandlers.handlePlay) {
+        audio.removeEventListener("play", oldHandlers.handlePlay);
+      }
+      if (oldHandlers.handlePause) {
+        audio.removeEventListener("pause", oldHandlers.handlePause);
+      }
+      if (oldHandlers.handleError) {
+        audio.removeEventListener("error", oldHandlers.handleError);
+      }
+      if (oldHandlers.handleStalled) {
+        audio.removeEventListener("stalled", oldHandlers.handleStalled);
+      }
+      
+      // Продолжаем регистрацию новых обработчиков ниже
+    } else {
+      audioReadyRef.current = true;
+    }
 
     try {
-      const context = new AudioContext();
-      const analyser = context.createAnalyser();
-      analyser.fftSize = 128;
-      analyser.smoothingTimeConstant = 0.85;
-      const source = context.createMediaElementSource(audio);
-      source.connect(analyser);
-      analyser.connect(context.destination);
-      audioContextRef.current = context;
-      analyserRef.current = analyser;
-      sourceRef.current = source;
+      // Закрываем старый AudioContext если он существует и закрыт
+      if (audioContextRef.current && audioContextRef.current.state === "closed") {
+        audioContextRef.current = null;
+        analyserRef.current = null;
+        sourceRef.current = null;
+      }
+      
+      // Создаем новый AudioContext если его нет
+      if (!audioContextRef.current) {
+        const context = new AudioContext();
+        const analyser = context.createAnalyser();
+        analyser.fftSize = 128;
+        analyser.smoothingTimeConstant = 0.85;
+        
+        // createMediaElementSource можно вызвать только один раз для каждого audio элемента
+        // Если source уже существует для этого элемента, это вызовет ошибку
+        const source = context.createMediaElementSource(audio);
+        source.connect(analyser);
+        analyser.connect(context.destination);
+        
+        audioContextRef.current = context;
+        analyserRef.current = analyser;
+        sourceRef.current = source;
+      }
     } catch (error) {
       console.warn("AudioContext init failed:", error);
+      // Если ошибка из-за того, что source уже создан для этого элемента,
+      // просто используем существующий контекст
+      if (!audioContextRef.current) {
+        try {
+          audioContextRef.current = new AudioContext();
+        } catch (e) {
+          console.warn("Failed to create AudioContext:", e);
+        }
+      }
     }
 
     const handlePlay = () => {
       setPlaybackState("playing");
       setStatusText(undefined);
       setStatusDetail(undefined);
+      // Clear any stalled timeout when playback resumes
+      if (stalledTimeoutRef.current) {
+        window.clearTimeout(stalledTimeoutRef.current);
+        stalledTimeoutRef.current = null;
+      }
       if (audioContextRef.current?.state === "suspended") {
         void audioContextRef.current.resume();
       }
     };
+
+    // Обработчик playing будет определен в startStationPlayback, где есть доступ к clearTimeouts
     const handlePause = () => setPlaybackState("paused");
     const handleError = () => {
-      void handleStreamError("audio.onerror");
+      // Only switch on actual errors
+      // error.code: 0 = no error, 1 = aborted, 2 = network, 3 = decode, 4 = not supported
+      if (audio.error && audio.error.code > 1) {
+        console.warn("Audio error event fired:", audio.error.code, audio.error.message);
+        console.log("Audio state at error:", {
+          networkState: audio.networkState,
+          readyState: audio.readyState,
+          src: audio.src,
+        });
+        
+        // Удаляем нерабочую станцию из verifiedStations
+        const currentStation = stationsRef.current[stationIndexRef.current];
+        if (currentStation && activeTagRef.current) {
+          removeVerifiedStation(currentStation.urlResolved, activeTagRef.current);
+        }
+        
+        // Расширенная проверка на "no supported source" с учетом NotSupportedError
+        const errorMessage = (audio.error.message || "").toLowerCase();
+        const isNoSupportedSource = 
+          audio.error.code === 4 || // MEDIA_ERR_SRC_NOT_SUPPORTED
+          errorMessage.includes("no supported source") ||
+          errorMessage.includes("failed to load") ||
+          errorMessage.includes("notsupportederror") ||
+          errorMessage.includes("notsupported") ||
+          (audio.networkState === 3 && audio.readyState === 0); // networkState === 3 и readyState === 0
+        
+        if (isNoSupportedSource) {
+          console.log("No supported source detected in error handler (code: " + audio.error.code + "), automatically switching to next station");
+          // Автоматически переключаемся на следующую станцию через handleNextStation
+          // без участия пользователя
+          void handleNextStation();
+        } else {
+          // Для других ошибок также автоматически переключаемся
+          console.log("Audio error detected (code: " + audio.error.code + "), automatically switching to next station");
+          void handleNextStation();
+        }
+      } else if (audio.networkState === 3) {
+        // Если нет ошибки в audio.error, но networkState === 3, это тоже проблема
+        console.log("networkState === 3 detected in error handler without audio.error");
+        // Удаляем нерабочую станцию из verifiedStations
+        const currentStation = stationsRef.current[stationIndexRef.current];
+        if (currentStation && activeTagRef.current) {
+          removeVerifiedStation(currentStation.urlResolved, activeTagRef.current);
+        }
+        // Дополнительная проверка readyState
+        if (audio.readyState === 0) {
+          console.log("networkState === 3 and readyState === 0 confirmed, switching station");
+          void handleNextStation();
+        } else {
+          // Даем немного времени, возможно это временное состояние
+          setTimeout(() => {
+            if (audio.networkState === 3 && audio.readyState === 0) {
+              console.log("networkState === 3 persists after delay, switching station");
+              void handleNextStation();
+            }
+          }, 500);
+        }
+      }
+    };
+
+    // Handle stalled event more intelligently
+    // Radio streams can stall temporarily during buffering, so wait before switching
+    const handleStalled = () => {
+      // Clear any existing stalled timeout
+      if (stalledTimeoutRef.current) {
+        window.clearTimeout(stalledTimeoutRef.current);
+      }
+      
+      // Wait 10 seconds before considering it a real problem
+      // If playback resumes before timeout, it will be cleared in handlePlay
+      stalledTimeoutRef.current = window.setTimeout(() => {
+        // Check if audio is still stalled and not playing
+        if (audio.readyState < 2 && audio.paused) {
+          console.warn("Stream stalled for too long, switching station");
+          void handleStreamError("audio stalled");
+        }
+        stalledTimeoutRef.current = null;
+      }, 10000);
+    };
+
+    // Сохраняем обработчики для последующего удаления
+    audioEventHandlersRef.current = {
+      handlePlay,
+      handlePause,
+      handleError,
+      handleStalled,
     };
 
     audio.addEventListener("play", handlePlay);
     audio.addEventListener("pause", handlePause);
     audio.addEventListener("error", handleError);
-    audio.addEventListener("stalled", () => {
-      void handleStreamError("audio stalled");
-    });
-    audio.addEventListener("ended", () => {
-      void handleStreamError("stream ended");
-    });
+    audio.addEventListener("stalled", handleStalled);
+    // Don't listen to "ended" - radio streams are infinite and shouldn't end
   };
 
   const startStationPlayback = async (index: number) => {
@@ -458,15 +833,116 @@ export default function Home() {
     setTrackTitle(null);
     setStatusText(undefined);
     activeStationUrlRef.current = station.urlResolved;
+    
+    // Добавляем станцию в список проигранных в текущей сессии
+    playedInSessionRef.current.add(station.urlResolved);
 
-    const audio = audioRef.current ?? new Audio();
+    // ПРИНУДИТЕЛЬНАЯ ОЧИСТКА: Очищаем старый audio элемент ПЕРЕД установкой нового URL
+    if (audioRef.current) {
+      // Удаляем все обработчики со старого элемента
+      const oldHandlers = audioEventHandlersRef.current;
+      if (oldHandlers.handlePlay) {
+        audioRef.current.removeEventListener("play", oldHandlers.handlePlay);
+      }
+      if (oldHandlers.handlePause) {
+        audioRef.current.removeEventListener("pause", oldHandlers.handlePause);
+      }
+      if (oldHandlers.handleError) {
+        audioRef.current.removeEventListener("error", oldHandlers.handleError);
+      }
+      if (oldHandlers.handleStalled) {
+        audioRef.current.removeEventListener("stalled", oldHandlers.handleStalled);
+      }
+      if (oldHandlers.handlePlaying) {
+        audioRef.current.removeEventListener("playing", oldHandlers.handlePlaying);
+      }
+      if (oldHandlers.handleCanplay) {
+        audioRef.current.removeEventListener("canplay", oldHandlers.handleCanplay);
+      }
+      if (oldHandlers.handleLoadstart) {
+        audioRef.current.removeEventListener("loadstart", oldHandlers.handleLoadstart);
+      }
+      
+      // ПРИНУДИТЕЛЬНАЯ ОЧИСТКА СТЕЙТА: Останавливаем, очищаем src и загружаем ПЕРЕД новым URL
+      audioRef.current.pause();
+      audioRef.current.src = "";
+      audioRef.current.load();
+      
+      // Отключаем старый source от AudioContext если он существует
+      if (sourceRef.current) {
+        try {
+          sourceRef.current.disconnect();
+        } catch (e) {
+          // Игнорируем ошибки отключения
+        }
+        sourceRef.current = null;
+      }
+    }
+    
+    // Всегда создаем новый audio элемент для каждой станции
+    // Это гарантирует, что обработчики регистрируются корректно
+    const audio = new Audio();
     audioRef.current = audio;
+    audioReadyRef.current = false; // Сбрасываем флаг для нового элемента
+    
+    // Clear any stalled timeout from previous station
+    if (stalledTimeoutRef.current) {
+      window.clearTimeout(stalledTimeoutRef.current);
+      stalledTimeoutRef.current = null;
+    }
+    
+    // Small delay to ensure cleanup
+    await new Promise(resolve => setTimeout(resolve, 50));
+    
+    // Настраиваем аудио только если это новый элемент или еще не настроено
     setupAudio(audio);
+    
+    // Устанавливаем источник ПОСЛЕ полной очистки и настройки
     audio.src = station.urlResolved;
     audio.loop = false;
     audio.volume = 0;
-    audio.preload = "none";
+    audio.preload = "auto"; // Изменено с "none" на "auto" для лучшей совместимости
     audio.crossOrigin = "anonymous";
+    
+    // Немедленная проверка после установки src: если сразу возникает ошибка или networkState === 3
+    // даем браузеру немного времени (100ms) для инициализации, затем проверяем
+    await new Promise(resolve => setTimeout(resolve, 100));
+    
+    // Ранняя проверка на ошибку "no supported source"
+    if (audio.error && audio.error.code > 1) {
+      const errorMessage = (audio.error.message || "").toLowerCase();
+      const isNoSupportedSource = 
+        audio.error.code === 4 || 
+        errorMessage.includes("no supported source") ||
+        errorMessage.includes("failed to load") ||
+        errorMessage.includes("notsupportederror");
+      if (isNoSupportedSource) {
+        console.log("Early detection: No supported source immediately after setting src");
+        void handleStreamError("no supported source");
+        return;
+      }
+    }
+    
+    // Ранняя проверка networkState === 3 (NO_SOURCE) с более агрессивной проверкой
+    if (audio.networkState === 3) {
+      // Даем еще немного времени, так как networkState может быть временным
+      await new Promise(resolve => setTimeout(resolve, 200));
+      if (audio.networkState === 3) {
+        // Дополнительная проверка: если readyState также 0, это точно проблема
+        if (audio.readyState === 0) {
+          console.log("Early detection: networkState === 3 and readyState === 0 (NO_SOURCE confirmed)");
+          void handleStreamError("no supported source");
+          return;
+        }
+        // Если networkState === 3 сохраняется, но readyState > 0, даем еще немного времени
+        await new Promise(resolve => setTimeout(resolve, 300));
+        if (audio.networkState === 3) {
+          console.log("Early detection: networkState === 3 (NO_SOURCE) persists after delay");
+          void handleStreamError("no supported source");
+          return;
+        }
+      }
+    }
     
     let hasPlaybackSignal = false;
     let timeoutCleared = false;
@@ -474,11 +950,11 @@ export default function Home() {
     const timeoutId = window.setTimeout(() => {
       if (!hasPlaybackSignal && !timeoutCleared) {
         setStatusText(t("statusStationUnstable"));
-        setStatusDetail("Timeout: Station not responding");
+        setStatusDetail(undefined);
         streamTimeoutRef.current = null;
         void handleStreamError("stream timeout");
       }
-    }, 5000);
+    }, 10000); // Увеличено с 5 до 10 секунд
     
     streamTimeoutRef.current = timeoutId;
     
@@ -491,16 +967,137 @@ export default function Home() {
       }
     };
     
-    audio.addEventListener("playing", clearTimeouts, { once: true });
-    audio.addEventListener("canplay", clearTimeouts, { once: true });
-    audio.addEventListener("loadstart", () => {
+    const handleCanplay = clearTimeouts;
+    
+    // Обработчик playing для кэширования и очистки таймаутов
+    const handlePlayingForCache = () => {
+      const currentStation = stationsRef.current[stationIndexRef.current];
+      if (currentStation && activeTagRef.current) {
+        saveStationToCache(currentStation, activeTagRef.current);
+      }
+      clearTimeouts();
+    };
+    const handleLoadstart = () => {
       setStatusText(t("statusTuning"));
-    }, { once: true });
+    };
+    
+    const handleLoadedMetadata = () => {
+      // Metadata loaded
+    };
+    
+    const handleCanPlayThrough = () => {
+      // Can play through
+    };
+    
+    // Сохраняем обработчики для последующего удаления
+    audioEventHandlersRef.current.handlePlaying = handlePlayingForCache;
+    audioEventHandlersRef.current.handleCanplay = handleCanplay;
+    audioEventHandlersRef.current.handleLoadstart = handleLoadstart;
+    
+    audio.addEventListener("playing", handlePlayingForCache, { once: true });
+    audio.addEventListener("canplay", handleCanplay, { once: true });
+    audio.addEventListener("loadstart", handleLoadstart, { once: true });
+    audio.addEventListener("loadedmetadata", handleLoadedMetadata, { once: true });
+    audio.addEventListener("canplaythrough", handleCanPlayThrough, { once: true });
 
     console.log("Попытка воспроизведения URL:", station.urlResolved);
+    console.log("Audio element state:", {
+      paused: audio.paused,
+      readyState: audio.readyState,
+      src: audio.src,
+      error: audio.error?.code,
+    });
+    console.log("AudioContext state:", audioContextRef.current?.state);
+
+    // Ждем, пока браузер начнет загрузку потока перед попыткой play()
+    // Это дает браузеру время определить формат потока
+    // networkState может быть 3 сразу после установки src, но затем меняется на 2
+    let loadStarted = false;
+    let finalNetworkState = audio.networkState;
+    const loadStartPromise = new Promise<void>((resolve) => {
+      const checkLoadStart = () => {
+        finalNetworkState = audio.networkState;
+        // networkState: 0=EMPTY, 1=IDLE, 2=LOADING, 3=NO_SOURCE
+        // Ждем пока начнется загрузка (networkState = 2) или произойдет ошибка
+        // НЕ проверяем networkState === 3 сразу, так как он может быть временным
+        if (audio.networkState === 2 || audio.error || loadStarted) {
+          loadStarted = true;
+          resolve();
+        } else {
+          setTimeout(checkLoadStart, 100);
+        }
+      };
+      // Даем максимум 3 секунды на начало загрузки
+      setTimeout(() => {
+        if (!loadStarted) {
+          loadStarted = true;
+          finalNetworkState = audio.networkState;
+          resolve();
+        }
+      }, 3000);
+      checkLoadStart();
+    });
+    
+    await loadStartPromise;
+    
+    // Проверяем, не произошла ли ошибка во время ожидания
+    if (audio.error && audio.error.code > 1) {
+      if (!timeoutCleared) {
+        timeoutCleared = true;
+        window.clearTimeout(timeoutId);
+        streamTimeoutRef.current = null;
+      }
+      const isNoSupportedSource = 
+        audio.error.code === 4 || 
+        (audio.error.message && audio.error.message.toLowerCase().includes("no supported source"));
+      void handleStreamError(isNoSupportedSource ? "no supported source" : `audio error during load: ${audio.error.code} - ${audio.error.message}`);
+      return;
+    }
+    
+    // Если после ожидания networkState все еще 3 (NO_SOURCE), это означает, что формат не поддерживается
+    if (audio.networkState === 3 && finalNetworkState === 3) {
+      if (!timeoutCleared) {
+        timeoutCleared = true;
+        window.clearTimeout(timeoutId);
+        streamTimeoutRef.current = null;
+      }
+      void handleStreamError("no supported source");
+      return;
+    }
+
+    // Дополнительная проверка: если есть ошибка или networkState === 3 перед play()
+    if (audio.error && audio.error.code > 1) {
+      if (!timeoutCleared) {
+        timeoutCleared = true;
+        window.clearTimeout(timeoutId);
+        streamTimeoutRef.current = null;
+      }
+      const isNoSupportedSource = 
+        audio.error.code === 4 || 
+        (audio.error.message && audio.error.message.toLowerCase().includes("no supported source"));
+      void handleStreamError(isNoSupportedSource ? "no supported source" : `audio error before play: ${audio.error.code}`);
+      return;
+    }
+
+    // Еще одна проверка networkState перед play()
+    if (audio.networkState === 3) {
+      if (!timeoutCleared) {
+        timeoutCleared = true;
+        window.clearTimeout(timeoutId);
+        streamTimeoutRef.current = null;
+      }
+      void handleStreamError("no supported source");
+      return;
+    }
 
     try {
+      // Убеждаемся, что AudioContext активен
+      if (audioContextRef.current?.state === "suspended") {
+        await audioContextRef.current.resume();
+      }
+      
       await audio.play();
+      console.log("Audio playback started successfully");
       failedCountRef.current = 0;
       if (hasPlaybackSignal) {
         setStatusText(undefined);
@@ -508,14 +1105,95 @@ export default function Home() {
       if (volume > 0) {
         fadeToVolume(volume);
       }
-    } catch {
+      
+      // Периодическая проверка состояния аудио после play() для обнаружения ошибок
+      // Это помогает поймать ошибки, которые возникают асинхронно
+      const healthCheckInterval = window.setInterval(() => {
+        // Проверяем состояние каждые 500ms в течение первых 3 секунд
+        if (audio.error && audio.error.code > 1) {
+          const isNoSupportedSource = 
+            audio.error.code === 4 || 
+            (audio.error.message && audio.error.message.toLowerCase().includes("no supported source")) ||
+            (audio.error.message && audio.error.message.toLowerCase().includes("failed to load"));
+          
+          if (isNoSupportedSource) {
+            console.log("Health check: No supported source detected after play(), switching station");
+            window.clearInterval(healthCheckInterval);
+            void handleNextStation();
+          }
+        } else if (audio.networkState === 3 && audio.readyState === 0) {
+          // networkState === 3 и readyState === 0 означает, что источник не поддерживается
+          console.log("Health check: networkState === 3 and readyState === 0, switching station");
+          window.clearInterval(healthCheckInterval);
+          void handleNextStation();
+        }
+      }, 500);
+      
+      // Останавливаем проверку через 3 секунды или когда начинается воспроизведение
+      const stopHealthCheck = () => {
+        window.clearInterval(healthCheckInterval);
+        audio.removeEventListener("playing", stopHealthCheck);
+        audio.removeEventListener("error", stopHealthCheck);
+      };
+      
+      audio.addEventListener("playing", stopHealthCheck, { once: true });
+      audio.addEventListener("error", stopHealthCheck, { once: true });
+      
+      // Автоматически останавливаем проверку через 3 секунды
+      setTimeout(() => {
+        window.clearInterval(healthCheckInterval);
+        audio.removeEventListener("playing", stopHealthCheck);
+        audio.removeEventListener("error", stopHealthCheck);
+      }, 3000);
+      
+      // Start preloading next stations in background after successful playback
+      void preloadNextStations();
+    } catch (error) {
+      console.error("Audio play failed:", error);
+      console.log("Audio error details:", {
+        error: audio.error?.code,
+        message: audio.error?.message,
+        paused: audio.paused,
+        readyState: audio.readyState,
+        networkState: audio.networkState,
+        src: audio.src,
+      });
+      
       if (!timeoutCleared) {
         timeoutCleared = true;
         window.clearTimeout(timeoutId);
         streamTimeoutRef.current = null;
       }
-      if (audio.error) {
-        void handleStreamError("playback error");
+      
+      // Проверяем ошибку после play() - более агрессивная проверка
+      const errorMessage = audio.error?.message?.toLowerCase() || "";
+      const exceptionMessage = error instanceof Error ? error.message.toLowerCase() : "";
+      const isNoSupportedSource = 
+        audio.error?.code === 4 || 
+        errorMessage.includes("no supported source") ||
+        errorMessage.includes("failed to load") ||
+        errorMessage.includes("notsupportederror") ||
+        exceptionMessage.includes("no supported source") ||
+        exceptionMessage.includes("failed to load") ||
+        exceptionMessage.includes("notsupportederror") ||
+        (audio.networkState === 3 && audio.readyState === 0);
+      
+      if (audio.error && audio.error.code > 1) {
+        if (isNoSupportedSource) {
+          console.log("No supported source detected after play(), switching station");
+          void handleNextStation(); // Используем handleNextStation для немедленного переключения
+        } else {
+          console.log("Audio error detected after play(), switching station");
+          void handleNextStation();
+        }
+      } else if (isNoSupportedSource || (error instanceof Error && exceptionMessage.includes("no supported"))) {
+        // Ошибка в исключении, но не в audio.error
+        console.log("No supported source detected in exception, switching station");
+        void handleNextStation();
+      } else if (error) {
+        // Для любых других ошибок также переключаемся автоматически
+        console.log("Playback error detected, switching station");
+        void handleNextStation();
       } else {
         setPlaybackState("blocked");
       }
@@ -523,13 +1201,29 @@ export default function Home() {
   };
 
   const fetchStations = async (tag: string, useRandomOrder = false) => {
+    // Отменяем предыдущий запрос, если он еще выполняется
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    
+    // Создаем новый AbortController
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    
     const requestTag = tag.trim().toLowerCase();
     // Добавляем timestamp для обхода кеша браузера
-    const cacheBuster = Date.now();
-    const response = await fetch(`/api/generate?t=${cacheBuster}`, {
+    const cacheBuster = Date.now() + Math.random();
+    
+    const response = await fetch(`/api/generate?tag=${requestTag}&t=${cacheBuster}`, {
       method: "POST",
       body: JSON.stringify({ tag: requestTag, useRandomOrder }),
-      headers: { "Content-Type": "application/json" },
+      headers: { 
+        "Content-Type": "application/json",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+      },
+      cache: 'no-store',
+      signal: controller.signal,
     });
 
     if (!response.ok) {
@@ -544,10 +1238,59 @@ export default function Home() {
     };
   };
 
+  const preloadNextStations = async () => {
+    // Prevent multiple simultaneous preloads
+    if (preloadInProgressRef.current) return;
+    preloadInProgressRef.current = true;
+
+    try {
+      // Preload next stations in background
+      const { stations: newStations } = await fetchStations(
+        activeTagRef.current ?? "lofi",
+        true // useRandomOrder = true
+      );
+      
+      if (newStations.length > 0) {
+        preloadedStationsRef.current = newStations;
+        console.log(`Preloaded ${newStations.length} stations for next switch`);
+      }
+    } catch (error) {
+      // Игнорируем ошибки отмены запроса (не критично для фонового процесса)
+      if (error instanceof Error && error.name === 'AbortError') {
+        console.log("Preload was aborted (non-critical)");
+      } else {
+        console.warn("Preload failed (non-critical):", error);
+      }
+      preloadedStationsRef.current = [];
+    } finally {
+      preloadInProgressRef.current = false;
+    }
+  };
+
   const handleStart = async (userActivity: string, tagOverride?: string) => {
+    // Блокировка: если уже идет загрузка, не запускаем новую
+    if (isLoadingRef.current || isConnecting) {
+      console.log("Already loading, ignoring duplicate request");
+      return;
+    }
+    
+    // Отменяем предыдущий запрос при быстром переключении жанров через AbortController
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    
+    isLoadingRef.current = true;
     const sessionId = sessionRef.current + 1;
     sessionRef.current = sessionId;
     const isQuickTag = Boolean(tagOverride);
+    
+    // Полный сброс аудио перед началом поиска
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.src = "";
+      audioRef.current.load();
+    }
     
     // Initialize UI
     setScreen("loading");
@@ -603,9 +1346,114 @@ export default function Home() {
       }
     }
 
+    // Синхронно обновляем жанр ДО начала запроса, чтобы UI не отставал
     setStationTag(selectedGenre.toUpperCase());
     setActiveTag(initialTag);
+    activeTagRef.current = initialTag;
 
+    // ПРИОРИТЕТ 1: Проверяем "Золотой Фонд" (verifiedStations) перед запросом к API
+    const unplayedVerified = getUnplayedVerifiedStations(initialTag);
+    if (unplayedVerified.length > 0) {
+      console.log(`Found ${unplayedVerified.length} unplayed verified stations in "Golden Fund" for genre "${initialTag}"`);
+      
+      // Выбираем случайную станцию из "Золотого Фонда"
+      const randomVerified = unplayedVerified[Math.floor(Math.random() * unplayedVerified.length)];
+      
+      // Создаем временный список станций с verified станцией
+      const tempStationList = [randomVerified];
+      stationsRef.current = tempStationList;
+      setStations(tempStationList);
+      stationIndexRef.current = 0;
+      setStationIndex(0);
+      
+      // Устанавливаем статус "МГНОВЕННОЕ ПОДКЛЮЧЕНИЕ"
+      setStatusText(t("instantConnection"));
+      setStatusDetail(undefined);
+      
+      // Немедленно запускаем воспроизведение из "Золотого Фонда"
+      try {
+        await startStationPlayback(0);
+        setScreen("playing");
+        setIsConnecting(false);
+        isLoadingRef.current = false;
+        
+        // Запускаем фоновый запрос к API для обновления списка (не блокируем UI)
+        void (async () => {
+          try {
+            const { stations: freshStations } = await fetchStations(initialTag, useRandomOrder);
+            if (freshStations.length > 0 && sessionId === sessionRef.current) {
+              // Обновляем список станций, но не прерываем текущее воспроизведение
+              stationsRef.current = freshStations;
+              setStations(freshStations);
+              console.log(`Updated station list with ${freshStations.length} fresh stations from API`);
+            }
+          } catch (error) {
+            // Игнорируем ошибки фонового запроса - у нас уже есть рабочая станция из "Золотого Фонда"
+            console.warn("Background station fetch failed (non-critical):", error);
+          }
+        })();
+        
+        return; // Выходим, так как уже запустили станцию из "Золотого Фонда"
+      } catch (error) {
+        // Если verified станция не загрузилась, удаляем её и продолжаем стандартный поиск
+        console.warn("Verified station from Golden Fund failed to load, removing from cache:", error);
+        removeVerifiedStation(randomVerified.urlResolved, initialTag);
+        // Продолжаем стандартный поиск ниже
+      }
+    }
+
+    // ПРИОРИТЕТ 2: Проверяем обычный кэш перед запросом к API
+    const cachedStations = getCachedStations(initialTag);
+    if (cachedStations.length > 0) {
+      console.log(`Found ${cachedStations.length} cached stations for genre "${initialTag}"`);
+      
+      // Выбираем случайную станцию из кэша
+      const randomCachedStation = cachedStations[Math.floor(Math.random() * cachedStations.length)];
+      
+      // Создаем временный список станций с кэшированной станцией
+      const tempStationList = [randomCachedStation];
+      stationsRef.current = tempStationList;
+      setStations(tempStationList);
+      stationIndexRef.current = 0;
+      setStationIndex(0);
+      
+      // Устанавливаем статус "МГНОВЕННОЕ ПОДКЛЮЧЕНИЕ"
+      setStatusText(t("instantConnection"));
+      setStatusDetail(undefined);
+      
+      // Немедленно запускаем воспроизведение из кэша
+      try {
+        await startStationPlayback(0);
+        setScreen("playing");
+        setIsConnecting(false);
+        isLoadingRef.current = false;
+        
+        // Запускаем фоновый запрос к API для обновления списка (не блокируем UI)
+        void (async () => {
+          try {
+            const { stations: freshStations } = await fetchStations(initialTag, useRandomOrder);
+            if (freshStations.length > 0 && sessionId === sessionRef.current) {
+              // Обновляем список станций, но не прерываем текущее воспроизведение
+              stationsRef.current = freshStations;
+              setStations(freshStations);
+              console.log(`Updated station list with ${freshStations.length} fresh stations`);
+            }
+          } catch (error) {
+            // Игнорируем ошибки фонового запроса - у нас уже есть рабочая станция из кэша
+            console.warn("Background station fetch failed (non-critical):", error);
+          }
+        })();
+        
+        return; // Выходим, так как уже запустили станцию из кэша
+      } catch (error) {
+        // Если кэшированная станция не загрузилась, удаляем её из кэша и продолжаем стандартный поиск
+        console.warn("Cached station failed to load, removing from cache:", error);
+        removeStationFromCache(randomCachedStation.urlResolved, initialTag);
+        // Продолжаем стандартный поиск ниже
+      }
+    }
+
+    // Стандартный поиск через API (если кэш пуст или кэшированная станция не загрузилась)
     if (isQuickTag) {
       setStatusDetail(format("statusSearchingFor", { tag: initialTag }));
     } else {
@@ -622,9 +1470,24 @@ export default function Home() {
       let secureIndex = -1;
 
       for (let attempt = 0; attempt < 3 && secureIndex === -1; attempt += 1) {
-        const result = await fetchStations(resolvedTag, useRandomOrder);
-        if (sessionId !== sessionRef.current) return;
-        stationList = result.stations;
+        let result: { tag: string; stations: Station[] } | null = null;
+        try {
+          result = await fetchStations(resolvedTag, useRandomOrder);
+          if (sessionId !== sessionRef.current) return;
+          stationList = result.stations;
+        } catch (error) {
+          // Игнорируем ошибки отмены запроса
+          if (error instanceof Error && error.name === 'AbortError') {
+            console.log("Request was aborted during search");
+            return;
+          }
+          throw error;
+        }
+        
+        if (!result) {
+          throw new Error("Failed to fetch stations");
+        }
+        
         if (!isQuickTag) {
           resolvedTag = result.tag;
         }
@@ -635,25 +1498,37 @@ export default function Home() {
           throw new Error("No stations found");
         }
 
-        secureIndex = stationList.findIndex((station) =>
-          station.urlResolved.toLowerCase().startsWith("https://")
-        );
+        // Все станции уже прошли фильтрацию на бэкенде (HTTPS, lastcheckok: 1, релевантность)
+        // Просто выбираем случайную станцию из списка (уже перемешанного на бэкенде)
+        secureIndex = Math.floor(Math.random() * stationList.length);
       }
 
-      if (secureIndex === -1) {
+      // secureIndex всегда будет >= 0, так как мы проверяем stationList.length выше
+      if (secureIndex < 0 || secureIndex >= stationList.length) {
         throw new Error("No secure streams available for this tag");
       }
 
       setStations(stationList);
       stationsRef.current = stationList;
+      
+      // Мгновенный запуск станции через startStationPlayback
+      // Проходит через все фильтры качества (HTTPS, lastcheckok, релевантность жанру)
       await startStationPlayback(secureIndex);
+      
       if (sessionId === sessionRef.current) {
         if (isQuickTag) {
           setStatusDetail(t("statusSignalLocked"));
         }
         setScreen("playing");
+        setIsConnecting(false);
+        isLoadingRef.current = false;
       }
     } catch (error) {
+      // Игнорируем ошибки отмены запроса
+      if (error instanceof Error && error.name === 'AbortError') {
+        console.log("Request was aborted");
+        return;
+      }
       console.error("Station fetch error:", error);
       setStatusText(
         error instanceof Error ? error.message : "Unable to find live stations"
@@ -663,6 +1538,7 @@ export default function Home() {
       if (sessionId === sessionRef.current) {
         setIsConnecting(false);
         setConnectionProgress(100);
+        isLoadingRef.current = false;
       }
     }
   };
@@ -728,6 +1604,13 @@ export default function Home() {
 
   const handleStop = () => {
     sessionRef.current += 1;
+    
+    // Отменяем все активные запросы
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    
     if (volumeFadeRef.current) {
       cancelAnimationFrame(volumeFadeRef.current);
       volumeFadeRef.current = null;
@@ -736,10 +1619,86 @@ export default function Home() {
       window.clearTimeout(streamTimeoutRef.current);
       streamTimeoutRef.current = null;
     }
+    if (stalledTimeoutRef.current) {
+      window.clearTimeout(stalledTimeoutRef.current);
+      stalledTimeoutRef.current = null;
+    }
+    // Полная остановка и очистка аудио
     if (audioRef.current) {
       audioRef.current.pause();
+      
+      // Удаляем все обработчики событий
+      const handlers = audioEventHandlersRef.current;
+      if (handlers.handlePlay) {
+        audioRef.current.removeEventListener("play", handlers.handlePlay);
+      }
+      if (handlers.handlePause) {
+        audioRef.current.removeEventListener("pause", handlers.handlePause);
+      }
+      if (handlers.handleError) {
+        audioRef.current.removeEventListener("error", handlers.handleError);
+      }
+      if (handlers.handleStalled) {
+        audioRef.current.removeEventListener("stalled", handlers.handleStalled);
+      }
+      if (handlers.handlePlaying) {
+        audioRef.current.removeEventListener("playing", handlers.handlePlaying);
+      }
+      if (handlers.handleCanplay) {
+        audioRef.current.removeEventListener("canplay", handlers.handleCanplay);
+      }
+      if (handlers.handleLoadstart) {
+        audioRef.current.removeEventListener("loadstart", handlers.handleLoadstart);
+      }
+      
+      audioEventHandlersRef.current = {};
+      
       audioRef.current.src = "";
+      audioRef.current.load();
+      
+      // Отключаем все обработчики через on* свойства
+      audioRef.current.onplay = null;
+      audioRef.current.onpause = null;
+      audioRef.current.onerror = null;
+      audioRef.current.onstalled = null;
+      audioRef.current.onplaying = null;
+      audioRef.current.oncanplay = null;
+      audioRef.current.onloadstart = null;
     }
+    
+    // Полностью закрываем AudioContext
+    if (audioContextRef.current) {
+      if (sourceRef.current) {
+        try {
+          sourceRef.current.disconnect();
+        } catch (e) {
+          // Игнорируем ошибки
+        }
+        sourceRef.current = null;
+      }
+      
+      if (analyserRef.current) {
+        try {
+          analyserRef.current.disconnect();
+        } catch (e) {
+          // Игнорируем ошибки
+        }
+        analyserRef.current = null;
+      }
+      
+      if (audioContextRef.current.state !== "closed") {
+        audioContextRef.current.close().catch(() => {});
+      }
+      audioContextRef.current = null;
+    }
+    
+    // Сбрасываем флаг готовности
+    audioReadyRef.current = false;
+    
+    // Clear preloaded stations when stopping
+    preloadedStationsRef.current = [];
+    preloadInProgressRef.current = false;
+    isLoadingRef.current = false;
     setScreen("idle");
     setStations([]);
     setStationName("");
@@ -754,7 +1713,7 @@ export default function Home() {
   };
 
   const handleTogglePlay = async () => {
-    if (!audioRef.current) return;
+    if (isConnecting || isSwitchingRef.current || !audioRef.current) return;
     if (playbackState === "playing") {
       audioRef.current.pause();
       setPlaybackState("paused");
@@ -792,21 +1751,193 @@ export default function Home() {
     setVolume(Math.min(1, Math.max(0, restored)));
   };
 
-  const handleNextStation = () => {
+  const handleNextStation = async () => {
+    if (isConnecting || isSwitchingRef.current || isLoadingRef.current) return;
+    
+    // Полный сброс аудио перед переключением
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.src = "";
+      audioRef.current.load();
+    }
+    
     const list = stationsRef.current;
     if (!list.length) return;
     failedCountRef.current = 0;
-    const nextIndex = (stationIndexRef.current + 1) % list.length;
-    void startStationPlayback(nextIndex);
+    
+    const currentGenre = activeTagRef.current ?? "lofi";
+    
+    // ПРИОРИТЕТ 1: Проверяем verifiedStations для текущего жанра (непроигранные в сессии)
+    const unplayedVerified = getUnplayedVerifiedStations(currentGenre);
+    if (unplayedVerified.length > 0) {
+      console.log(`Found ${unplayedVerified.length} unplayed verified stations for genre "${currentGenre}"`);
+      // Выбираем случайную станцию из непроигранных verified
+      const randomVerified = unplayedVerified[Math.floor(Math.random() * unplayedVerified.length)];
+      
+      // Создаем временный список с verified станцией
+      stationsRef.current = [randomVerified];
+      setStations([randomVerified]);
+      await startStationPlayback(0);
+      
+      // Запускаем фоновый запрос для обновления списка (не блокируем)
+      void preloadNextStations();
+      return;
+    }
+    
+    // ПРИОРИТЕТ 2: Используем preloaded stations для быстрого переключения
+    if (preloadedStationsRef.current.length > 0) {
+      const preloaded = preloadedStationsRef.current;
+      preloadedStationsRef.current = []; // Clear used preload
+      
+      stationsRef.current = preloaded;
+      setStations(preloaded);
+      const randomIndex = Math.floor(Math.random() * preloaded.length);
+      await startStationPlayback(randomIndex);
+      
+      // Start preloading next stations in background (non-blocking)
+      void preloadNextStations();
+      return;
+    }
+    
+    // ПРИОРИТЕТ 3: Если verifiedStations закончились или пусты, делаем стандартный fetch
+    isLoadingRef.current = true;
+    try {
+      const { stations: newStations } = await fetchStations(
+        currentGenre,
+        true // useRandomOrder = true for random selection
+      );
+      if (newStations.length > 0) {
+        stationsRef.current = newStations;
+        setStations(newStations);
+        // Select random station from new list
+        const randomIndex = Math.floor(Math.random() * newStations.length);
+        await startStationPlayback(randomIndex);
+        
+        // Start preloading next stations in background
+        void preloadNextStations();
+      } else {
+        // Fallback to next in existing list if fetch fails
+        const nextIndex = (stationIndexRef.current + 1) % list.length;
+        await startStationPlayback(nextIndex);
+      }
+    } catch (error) {
+      // Игнорируем ошибки отмены запроса
+      if (error instanceof Error && error.name === 'AbortError') {
+        console.log("Request was aborted during next station fetch");
+        return;
+      }
+      console.error("Failed to fetch new stations, using existing list:", error);
+      // Fallback to next in existing list
+      const nextIndex = (stationIndexRef.current + 1) % list.length;
+      await startStationPlayback(nextIndex);
+    } finally {
+      isLoadingRef.current = false;
+    }
   };
 
   const handlePrevStation = () => {
+    if (isConnecting || isSwitchingRef.current) return;
     const list = stationsRef.current;
     if (!list.length) return;
     failedCountRef.current = 0;
     const prevIndex = (stationIndexRef.current - 1 + list.length) % list.length;
     void startStationPlayback(prevIndex);
   };
+
+  // Принудительная остановка аудио при переходе на главный экран
+  useEffect(() => {
+    if (screen === "idle") {
+      // Полная остановка аудио при переходе на idle
+      if (audioRef.current) {
+        // Сначала останавливаем воспроизведение
+        audioRef.current.pause();
+        
+        // Удаляем все обработчики событий через removeEventListener
+        const handlers = audioEventHandlersRef.current;
+        if (handlers.handlePlay) {
+          audioRef.current.removeEventListener("play", handlers.handlePlay);
+        }
+        if (handlers.handlePause) {
+          audioRef.current.removeEventListener("pause", handlers.handlePause);
+        }
+        if (handlers.handleError) {
+          audioRef.current.removeEventListener("error", handlers.handleError);
+        }
+        if (handlers.handleStalled) {
+          audioRef.current.removeEventListener("stalled", handlers.handleStalled);
+        }
+        if (handlers.handlePlaying) {
+          audioRef.current.removeEventListener("playing", handlers.handlePlaying);
+        }
+        if (handlers.handleCanplay) {
+          audioRef.current.removeEventListener("canplay", handlers.handleCanplay);
+        }
+        if (handlers.handleLoadstart) {
+          audioRef.current.removeEventListener("loadstart", handlers.handleLoadstart);
+        }
+        
+        // Очищаем обработчики
+        audioEventHandlersRef.current = {};
+        
+        // Полностью очищаем источник
+        audioRef.current.src = "";
+        audioRef.current.load();
+        
+        // Отключаем все обработчики через on* свойства (на всякий случай)
+        audioRef.current.onplay = null;
+        audioRef.current.onpause = null;
+        audioRef.current.onerror = null;
+        audioRef.current.onstalled = null;
+        audioRef.current.onplaying = null;
+        audioRef.current.oncanplay = null;
+        audioRef.current.onloadstart = null;
+      }
+      
+      // НЕ закрываем AudioContext полностью при переходе на idle
+      // Просто приостанавливаем его, чтобы можно было использовать снова
+      if (audioContextRef.current) {
+        // Отключаем source от analyser
+        if (sourceRef.current) {
+          try {
+            sourceRef.current.disconnect();
+          } catch (e) {
+            // Игнорируем ошибки отключения
+          }
+          sourceRef.current = null;
+        }
+        
+        // Приостанавливаем AudioContext вместо закрытия
+        // Это позволит использовать его снова без пересоздания
+        if (audioContextRef.current.state !== "closed" && audioContextRef.current.state !== "suspended") {
+          audioContextRef.current.suspend().catch(() => {});
+        }
+        // НЕ обнуляем audioContextRef - оставляем его для повторного использования
+      }
+      
+      // НЕ сбрасываем audioReadyRef - оставляем его, чтобы не пересоздавать source
+      // createMediaElementSource можно вызвать только один раз для каждого элемента
+      
+      // Очищаем все таймауты
+      if (streamTimeoutRef.current) {
+        window.clearTimeout(streamTimeoutRef.current);
+        streamTimeoutRef.current = null;
+      }
+      if (stalledTimeoutRef.current) {
+        window.clearTimeout(stalledTimeoutRef.current);
+        stalledTimeoutRef.current = null;
+      }
+      
+      // Останавливаем анимации
+      if (volumeFadeRef.current) {
+        cancelAnimationFrame(volumeFadeRef.current);
+        volumeFadeRef.current = null;
+      }
+      
+      // Сбрасываем состояние
+      activeStationUrlRef.current = null;
+      setPlaybackState("idle");
+    }
+  }, [screen]);
 
   useEffect(() => {
     if (screen !== "playing") return;
@@ -921,6 +2052,7 @@ export default function Home() {
         }
         statusDetail={statusDetail}
         aiReasoning={aiReasoning}
+        isConnecting={isConnecting}
         labels={{
           nowPlaying: t("nowPlaying"),
           genre: t("genre"),

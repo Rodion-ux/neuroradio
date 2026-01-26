@@ -19,6 +19,7 @@ type PlayerScreenProps = {
   statusText?: string;
   statusDetail?: string;
   aiReasoning?: string;
+  isConnecting?: boolean;
   labels: {
     nowPlaying: string;
     genre: string;
@@ -112,6 +113,7 @@ export function PlayerScreen({
   statusText,
   statusDetail,
   aiReasoning,
+  isConnecting = false,
   labels,
   lang,
   onSetLang,
@@ -226,7 +228,7 @@ export function PlayerScreen({
       }`}
     >
       <div className="crt-shell w-full max-w-5xl rounded-3xl">
-        <div className="crt-screen crt-text crt-life relative flex h-full flex-col items-center justify-between gap-4 rounded-3xl px-5 py-6 text-center text-neon sm:gap-10 sm:px-12 sm:py-10">
+        <div className="crt-screen crt-text crt-life relative flex min-h-[600px] flex-col items-center justify-between gap-4 rounded-3xl px-5 py-6 text-center text-neon sm:gap-10 sm:px-12 sm:py-10">
           <BackgroundFx />
           <div className="absolute left-4 top-4 h-3 w-16 bg-neon/40 shadow-[0_0_10px_rgba(255,119,168,0.6)] sm:left-6 sm:top-6 sm:shadow-[0_0_12px_rgba(255,119,168,0.7)]" />
           <div className="absolute right-4 top-4 h-3 w-10 bg-neon/40 shadow-[0_0_10px_rgba(255,119,168,0.6)] sm:right-6 sm:top-6 sm:shadow-[0_0_12px_rgba(255,119,168,0.7)]" />
@@ -261,7 +263,7 @@ export function PlayerScreen({
             NEURO RADIO
           </div>
 
-          <div className="mt-2 flex w-full max-w-3xl flex-col items-center gap-4 sm:mt-6 sm:gap-8">
+          <div className="mt-2 flex w-full max-w-3xl flex-col items-center gap-4 sm:mt-6 sm:gap-8 min-h-[400px]">
             <p className="text-[9px] uppercase tracking-[0.3em] text-neon/80 sm:text-xs sm:tracking-[0.35em]">
               {labels.nowPlaying}
             </p>
@@ -329,7 +331,10 @@ export function PlayerScreen({
               <button
                 type="button"
                 onClick={onPrevStation}
-                className="pixel-button flex h-10 w-10 items-center justify-center rounded-2xl border-2 border-neon bg-black/40 backdrop-blur-md transition-transform hover:scale-105 active:scale-95 will-change-transform sm:h-12 sm:w-12"
+                disabled={isConnecting}
+                className={`pixel-button flex h-10 w-10 items-center justify-center rounded-2xl border-2 border-neon bg-black/40 backdrop-blur-md transition-transform will-change-transform sm:h-12 sm:w-12 ${
+                  isConnecting ? "cursor-not-allowed opacity-50" : "hover:scale-105 active:scale-95"
+                }`}
               >
                 <Image
                   src="/icon-prev.svg"
@@ -343,7 +348,10 @@ export function PlayerScreen({
               <button
                 type="button"
                 onClick={onTogglePlay}
-                className="pixel-button flex h-11 w-11 items-center justify-center rounded-2xl border-2 border-neon bg-black/40 backdrop-blur-md transition-transform hover:scale-105 active:scale-95 will-change-transform sm:h-14 sm:w-14"
+                disabled={isConnecting}
+                className={`pixel-button flex h-11 w-11 items-center justify-center rounded-2xl border-2 border-neon bg-black/40 backdrop-blur-md transition-transform will-change-transform sm:h-14 sm:w-14 ${
+                  isConnecting ? "cursor-not-allowed opacity-50" : "hover:scale-105 active:scale-95"
+                }`}
               >
                 <Image
                   src={isPlaying ? "/icon-pause.svg" : "/icon-play.svg"}
@@ -357,7 +365,10 @@ export function PlayerScreen({
               <button
                 type="button"
                 onClick={onNextStation}
-                className="pixel-button flex h-10 w-10 items-center justify-center rounded-2xl border-2 border-neon bg-black/40 backdrop-blur-md transition-transform hover:scale-105 active:scale-95 will-change-transform sm:h-12 sm:w-12"
+                disabled={isConnecting}
+                className={`pixel-button flex h-10 w-10 items-center justify-center rounded-2xl border-2 border-neon bg-black/40 backdrop-blur-md transition-transform will-change-transform sm:h-12 sm:w-12 ${
+                  isConnecting ? "cursor-not-allowed opacity-50" : "hover:scale-105 active:scale-95"
+                }`}
               >
                 <Image
                   src="/icon-next.svg"
@@ -457,68 +468,79 @@ export function PlayerScreen({
               />
             </div>
 
-            {trackTitle?.trim() && (
-              <button
-                type="button"
-                onClick={handleCopy}
-                disabled={!canCopy}
-                className={`relative mt-2 w-full max-w-2xl rounded-2xl border-2 border-neon bg-black/40 px-4 py-2 text-center backdrop-blur-md transition-transform will-change-transform sm:mt-4 sm:py-3 ${
-                  canCopy ? "hover:scale-105 active:scale-95" : "cursor-default opacity-80"
-                }`}
-                aria-label={trackLine}
-              >
-                <div className={shouldTrackMarquee ? "marquee" : ""}>
-                  <p
-                    className={`text-[8px] uppercase tracking-[0.24em] text-neon-bright sm:text-[9px] sm:tracking-[0.32em] ${
-                      shouldTrackMarquee ? "marquee-track" : ""
-                    }`}
-                    style={trackStyle}
-                  >
-                    {trackLine}
-                    {shouldTrackMarquee ? ` • ${trackLine}` : ""}
-                  </p>
-                </div>
-                <AnimatePresence>
-                  {copied && (
-                    <motion.span
-                      initial={{ opacity: 0, y: 6, scale: 0.9 }}
-                      animate={{ opacity: 1, y: 0, scale: 1 }}
-                      exit={{ opacity: 0, y: -6, scale: 0.95 }}
-                      transition={{ duration: 0.2 }}
-                      className="pointer-events-none absolute right-3 top-2 text-[8px] uppercase tracking-[0.3em] text-neon-bright"
+            {/* Фиксированный контейнер для trackTitle - предотвращает CLS */}
+            <div className="mt-2 w-full max-w-2xl sm:mt-4" style={{ minHeight: '32px', height: '32px' }}>
+              {trackTitle?.trim() && (
+                <button
+                  type="button"
+                  onClick={handleCopy}
+                  disabled={!canCopy}
+                  className={`relative w-full rounded-2xl border-2 border-neon bg-black/40 px-4 py-2 text-center backdrop-blur-md transition-transform will-change-transform sm:py-3 ${
+                    canCopy ? "hover:scale-105 active:scale-95" : "cursor-default opacity-80"
+                  }`}
+                  aria-label={trackLine}
+                >
+                  <div className={shouldTrackMarquee ? "marquee" : ""}>
+                    <p
+                      className={`text-[8px] uppercase tracking-[0.24em] text-neon-bright sm:text-[9px] sm:tracking-[0.32em] ${
+                        shouldTrackMarquee ? "marquee-track" : ""
+                      }`}
+                      style={trackStyle}
                     >
-                      {labels.copied}
-                    </motion.span>
-                  )}
-                </AnimatePresence>
-              </button>
-            )}
+                      {trackLine}
+                      {shouldTrackMarquee ? ` • ${trackLine}` : ""}
+                    </p>
+                  </div>
+                  <AnimatePresence>
+                    {copied && (
+                      <motion.span
+                        initial={{ opacity: 0, y: 6, scale: 0.9 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: -6, scale: 0.95 }}
+                        transition={{ duration: 0.2 }}
+                        className="pointer-events-none absolute right-3 top-2 text-[8px] uppercase tracking-[0.3em] text-neon-bright"
+                      >
+                        {labels.copied}
+                      </motion.span>
+                    )}
+                  </AnimatePresence>
+                </button>
+              )}
+            </div>
 
             <button
               type="button"
               onClick={onStop}
-              className="pixel-button mt-2 w-full max-w-[160px] rounded-2xl border-2 border-neon bg-black/40 px-4 py-2 text-[9px] uppercase tracking-[0.3em] text-neon backdrop-blur-md transition hover:bg-neon hover:text-[#2d1b2e] hover:scale-105 active:scale-95 will-change-transform sm:mt-4 sm:max-w-[200px] sm:px-6 sm:py-4 sm:text-xs sm:tracking-[0.35em]"
+              disabled={isConnecting}
+              className={`pixel-button mt-2 w-full max-w-[160px] rounded-2xl border-2 border-neon bg-black/40 px-4 py-2 text-[9px] uppercase tracking-[0.3em] text-neon backdrop-blur-md transition will-change-transform sm:mt-4 sm:max-w-[200px] sm:px-6 sm:py-4 sm:text-xs sm:tracking-[0.35em] ${
+                isConnecting ? "cursor-not-allowed opacity-50" : "hover:bg-neon hover:text-[#2d1b2e] hover:scale-105 active:scale-95"
+              }`}
             >
               {labels.stop}
             </button>
 
-            {statusText && (
-              <p className="text-[8px] uppercase tracking-[0.25em] text-neon/70 sm:text-[10px] sm:tracking-[0.3em]">
-                {statusText}
-              </p>
-            )}
-            {statusDetail && (
-              <div className={shouldStatusMarquee ? "marquee" : ""}>
-                <p
-                  className={`text-[7px] uppercase tracking-[0.25em] text-neon/50 sm:text-[9px] sm:tracking-[0.3em] ${
-                    shouldStatusMarquee ? "marquee-track" : ""
-                  }`}
-                  style={statusStyle}
-                >
-                  {statusDetail}
-                </p>
+            {/* Фиксированный контейнер для статусов - предотвращает CLS */}
+            <div className="w-full" style={{ minHeight: '48px', height: '48px' }}>
+              <div className="flex flex-col justify-center h-full">
+                {statusText && (
+                  <p className="text-[8px] uppercase tracking-[0.25em] text-neon/70 sm:text-[10px] sm:tracking-[0.3em]">
+                    {statusText}
+                  </p>
+                )}
+                {statusDetail && (
+                  <div className={shouldStatusMarquee ? "marquee" : ""}>
+                    <p
+                      className={`text-[7px] uppercase tracking-[0.25em] text-neon/50 sm:text-[9px] sm:tracking-[0.3em] ${
+                        shouldStatusMarquee ? "marquee-track" : ""
+                      }`}
+                      style={statusStyle}
+                    >
+                      {statusDetail}
+                    </p>
+                  </div>
+                )}
               </div>
-            )}
+            </div>
           </div>
 
           {isPlaying && (

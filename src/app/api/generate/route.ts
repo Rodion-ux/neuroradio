@@ -43,15 +43,53 @@ const getStreamFormat = (url: string): "mp3" | "aac" | "ogg" | "other" => {
   return "other";
 };
 
-const normalizeStations = (stations: Station[]) => {
+// Проверка соответствия станции запрошенному жанру
+const isStationRelevant = (station: Station, requestedTag: string): boolean => {
+  const mapping = getTagMapping(requestedTag);
+  if (!mapping) return true; // Если маппинга нет, пропускаем все станции
+  
+  const stationTags = (station.tags || []).map(t => t.toLowerCase());
+  const stationName = (station.name || "").toLowerCase();
+  const allText = [...stationTags, stationName].join(" ");
+  
+  // Проверка стоп-слов: если найдено стоп-слово, станция исключается
+  for (const stopWord of mapping.stopWords) {
+    if (allText.includes(stopWord.toLowerCase())) {
+      return false;
+    }
+  }
+  
+  // Проверка обязательных тегов: хотя бы один должен присутствовать
+  if (mapping.requiredTags && mapping.requiredTags.length > 0) {
+    const hasRequiredTag = mapping.requiredTags.some(requiredTag => 
+      allText.includes(requiredTag.toLowerCase())
+    );
+    if (!hasRequiredTag) {
+      return false;
+    }
+  }
+  
+  return true;
+};
+
+const normalizeStations = (stations: Station[], requestedTag?: string) => {
   const filtered = stations.filter((station) => {
     const url = station.urlResolved || station.url;
     if (!url) return false;
+    // Строгая проверка: только HTTPS, HTTP должен быть отфильтрован
     if (!isHttpsUrl(url)) return false;
+    // Дополнительная проверка: убеждаемся, что URL действительно начинается с https://
+    if (!url.trim().toLowerCase().startsWith("https://")) return false;
+    
+    // Проверка релевантности жанру (если передан requestedTag)
+    if (requestedTag && !isStationRelevant(station, requestedTag)) {
+      return false;
+    }
+    
     return true;
   });
 
-  console.log("Found stations after HTTPS filter:", filtered.length);
+  console.log(`Found ${filtered.length} stations after HTTPS and relevance filter (requested: ${requestedTag || "any"})`);
 
   const withFormat = filtered.map((station) => ({
     station,
@@ -73,6 +111,91 @@ const normalizeStations = (stations: Station[]) => {
     favicon: station.favicon,
     country: station.country,
   }));
+};
+
+/**
+ * Check if a radio station URL is accessible
+ * Uses HEAD request with timeout to quickly verify availability
+ */
+const checkStationAvailability = async (url: string, timeoutMs = 3000): Promise<boolean> => {
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    
+    const response = await fetch(url, {
+      method: 'HEAD',
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; NeuroRadio/1.0)',
+        'Range': 'bytes=0-1', // Request minimal range to test stream
+      },
+    });
+    
+    clearTimeout(timeoutId);
+    
+    // Accept 200, 206 (partial content), 301, 302 (redirects)
+    const isOk = response.ok || response.status === 206 || 
+                 response.status === 301 || response.status === 302;
+    
+    return isOk;
+  } catch (error) {
+    // If HEAD fails, try GET with minimal data
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+      
+      const response = await fetch(url, {
+        method: 'GET',
+        signal: controller.signal,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (compatible; NeuroRadio/1.0)',
+          'Range': 'bytes=0-1024', // Request small chunk
+        },
+      });
+      
+      clearTimeout(timeoutId);
+      return response.ok || response.status === 206;
+    } catch {
+      return false;
+    }
+  }
+};
+
+/**
+ * Filter stations by availability, checking multiple in parallel
+ * Returns only stations that are confirmed accessible
+ */
+const filterAvailableStations = async (
+  stations: ReturnType<typeof normalizeStations>,
+  maxChecks = 20
+): Promise<ReturnType<typeof normalizeStations>> => {
+  if (!stations.length) return [];
+  
+  // Check up to maxChecks stations in parallel
+  const stationsToCheck = stations.slice(0, maxChecks);
+  const availabilityChecks = await Promise.allSettled(
+    stationsToCheck.map(station => 
+      checkStationAvailability(station.urlResolved).then(available => ({
+        station,
+        available,
+      }))
+    )
+  );
+  
+  const availableStations: ReturnType<typeof normalizeStations> = [];
+  
+  for (const result of availabilityChecks) {
+    if (result.status === 'fulfilled' && result.value.available) {
+      availableStations.push(result.value.station);
+    }
+  }
+  
+  console.info(
+    `Checked ${stationsToCheck.length} stations, found ${availableStations.length} available`
+  );
+  
+  // Return only available stations
+  return availableStations;
 };
 
 class NoStationsError extends Error {}
@@ -106,7 +229,9 @@ export async function POST(request: NextRequest) {
       { tag: displayTag, stations },
       {
         headers: {
-          'Cache-Control': 'no-store',
+          'Cache-Control': 'no-store, max-age=0',
+          'Pragma': 'no-cache',
+          'Expires': '0',
         },
       }
     );
@@ -125,20 +250,119 @@ export async function POST(request: NextRequest) {
   }
 }
 
+// Маппинг тегов с расширенными поисковыми терминами и стоп-словами
+type TagMapping = {
+  searchTerms: string; // Термины для поиска (через запятую)
+  stopWords: string[]; // Слова, которые должны исключать станцию
+  requiredTags?: string[]; // Обязательные теги (хотя бы один должен быть)
+};
+
+const TAG_MAPPINGS: Record<string, TagMapping> = {
+  "dnb": {
+    searchTerms: "drum and bass, jungle, neurofunk, liquid dnb",
+    stopWords: ["pop", "top40", "top 40", "talk", "news"],
+    requiredTags: ["drum", "bass", "jungle", "dnb", "neurofunk", "liquid"],
+  },
+  "metal": {
+    searchTerms: "metal, heavy metal, death metal, thrash metal, metalcore, doom metal, black metal",
+    stopWords: ["pop", "talk", "news", "country", "folk"],
+    requiredTags: ["metal", "heavy", "death", "thrash", "metalcore", "doom", "black"],
+  },
+  "phonk": {
+    searchTerms: "phonk, drift phonk, memphis rap, memphis phonk",
+    stopWords: ["pop", "talk", "news"],
+    requiredTags: ["phonk", "drift", "memphis"],
+  },
+  "retro game": {
+    searchTerms: "chiptune, 8-bit, video game music, vgm, game music",
+    stopWords: ["pop", "talk", "news"],
+    requiredTags: ["chiptune", "8-bit", "8bit", "vgm", "game", "video game"],
+  },
+  "lo-fi": {
+    searchTerms: "lofi, lo fi, low fi, chillhop, chill beats",
+    stopWords: ["talk", "news", "hardcore"],
+    requiredTags: ["lofi", "lo fi", "low fi", "chill"],
+  },
+  "lofi": {
+    searchTerms: "lofi, lo fi, low fi, chillhop, chill beats",
+    stopWords: ["talk", "news", "hardcore"],
+    requiredTags: ["lofi", "lo fi", "low fi", "chill"],
+  },
+  "chiptune": {
+    searchTerms: "chiptune, 8-bit, vgm, video game music, game music",
+    stopWords: ["pop", "talk", "news"],
+    requiredTags: ["chiptune", "8-bit", "8bit", "vgm", "game"],
+  },
+  "synthwave": {
+    searchTerms: "synthwave, retrowave, outrun, cyberpunk, 80s synth",
+    stopWords: ["talk", "news"],
+    requiredTags: ["synthwave", "retrowave", "outrun", "cyberpunk"],
+  },
+  "ambient": {
+    searchTerms: "ambient, ambient music, chill ambient, dark ambient, space ambient",
+    stopWords: ["talk", "news", "hardcore"],
+    requiredTags: ["ambient"],
+  },
+  "techno": {
+    searchTerms: "techno, techno music, electronic techno, minimal techno, dub techno",
+    stopWords: ["pop", "talk", "news", "country"],
+    requiredTags: ["techno"],
+  },
+  "jazz": {
+    searchTerms: "jazz, smooth jazz, modern jazz, bebop, cool jazz",
+    stopWords: ["talk", "news", "hardcore", "metal"],
+    requiredTags: ["jazz"],
+  },
+  "soul": {
+    searchTerms: "soul, soul music, classic soul, motown, r&b",
+    stopWords: ["talk", "news", "hardcore", "metal"],
+    requiredTags: ["soul", "motown"],
+  },
+  "piano": {
+    searchTerms: "piano, piano music, classical piano, instrumental piano",
+    stopWords: ["talk", "news", "hardcore", "metal"],
+    requiredTags: ["piano"],
+  },
+  "hip-hop": {
+    searchTerms: "hip hop, hiphop, rap, underground rap, boom bap",
+    stopWords: ["talk", "news", "country"],
+    requiredTags: ["hip", "hop", "rap", "hiphop"],
+  },
+  "hiphop": {
+    searchTerms: "hip hop, hiphop, rap, underground rap, boom bap",
+    stopWords: ["talk", "news", "country"],
+    requiredTags: ["hip", "hop", "rap", "hiphop"],
+  },
+  "k-pop": {
+    searchTerms: "kpop, korean pop, k-pop, korean music",
+    stopWords: ["talk", "news"],
+    requiredTags: ["kpop", "korean", "k-pop"],
+  },
+  "kpop": {
+    searchTerms: "kpop, korean pop, k-pop, korean music",
+    stopWords: ["talk", "news"],
+    requiredTags: ["kpop", "korean", "k-pop"],
+  },
+  "j-pop": {
+    searchTerms: "j-pop, j pop, jpop, japanese pop, japanese music",
+    stopWords: ["talk", "news"],
+    requiredTags: ["jpop", "japanese", "j-pop"],
+  },
+  "jpop": {
+    searchTerms: "j-pop, j pop, jpop, japanese pop, japanese music",
+    stopWords: ["talk", "news"],
+    requiredTags: ["jpop", "japanese", "j-pop"],
+  },
+};
+
 const normalizeTagForSearch = (tag: string): string => {
-  const tagMap: Record<string, string> = {
-    "dnb": "drum and bass",
-    "lo-fi": "lofi",
-    "lofi": "lofi",
-    "hip-hop": "hip hop",
-    "hiphop": "hip hop",
-    "k-pop": "k-pop",
-    "kpop": "k-pop",
-    "j-pop": "j-pop",
-    "jpop": "j-pop",
-    "retro game": "chiptune",
-  };
-  return tagMap[tag.toLowerCase()] || tag;
+  const normalized = tag.toLowerCase().trim();
+  return TAG_MAPPINGS[normalized]?.searchTerms || tag;
+};
+
+const getTagMapping = (tag: string): TagMapping | null => {
+  const normalized = tag.toLowerCase().trim();
+  return TAG_MAPPINGS[normalized] || null;
 };
 
 const getFallbackTag = (tag: string): string | null => {
@@ -157,6 +381,7 @@ const getFallbackTag = (tag: string): string | null => {
     "nature sounds": "ambient",
     "soft piano": "piano",
     "chill r&b": "rnb",
+    "chill rnb": "rnb",
     "sexual vibe": "rnb",
     "lofi sex": "lofi",
     "phonk drift": "phonk",
@@ -169,53 +394,120 @@ const getFallbackTag = (tag: string): string | null => {
     "rnb party": "rnb",
     "brain food": "ambient",
     "dub techno": "techno",
+    "slow jam": "rnb",
+    "slowjam": "rnb",
   };
   return fallbackMap[tag.toLowerCase()] || null;
 };
 
 const fetchSecureStationsForTag = async (tag: string, useRandomOrder = false) => {
-  // Normalize tag for search (e.g., "dnb" -> "drum and bass")
+  // Normalize tag for search (e.g., "dnb" -> "drum and bass, jungle, neurofunk")
   const normalizedTag = normalizeTagForSearch(tag);
   
-  const stations = await withRetry(() => {
-    const query = {
-      tag: normalizedTag,
-      limit: 30,
-      order: (useRandomOrder ? "random" : "clickCount") as any,
-      reverse: !useRandomOrder,
-      hideBroken: false,
-      lastcheckok: 1,
-    };
-    return radioBrowser.searchStations(query as any);
-  });
+  // Split multiple tags by comma and try each one, collecting all results
+  const tagVariants = normalizedTag.split(',').map(t => t.trim()).filter(Boolean);
+  const allSecureStations: ReturnType<typeof normalizeStations> = [];
   
-  const secure = normalizeStations(stations as Station[]);
+  // Используем useRandomOrder для выбора порядка сортировки
+  const orderType = useRandomOrder ? "random" : "clickCount";
   
-  if (secure.length) {
-    console.info(`Found ${secure.length} HTTPS stations for tag ${normalizedTag} (original: ${tag})`);
-    return secure;
-  }
-
-  // Try fallback tag (use original tag for fallback lookup)
-  const fallbackTag = getFallbackTag(tag);
-  if (fallbackTag) {
-    const normalizedFallback = normalizeTagForSearch(fallbackTag);
-    console.info(`Trying fallback tag "${normalizedFallback}" for "${tag}"`);
-    const fallbackStations = await withRetry(() => {
+  for (const searchTag of tagVariants) {
+    const stations = await withRetry(() => {
       const query = {
-        tag: normalizedFallback,
-        limit: 30,
-        order: (useRandomOrder ? "random" : "clickCount") as any,
-        reverse: !useRandomOrder,
+        tag: searchTag,
+        limit: 100,
+        order: orderType as any,
+        reverse: false,
         hideBroken: false,
         lastcheckok: 1,
       };
       return radioBrowser.searchStations(query as any);
     });
-    const secureFallback = normalizeStations(fallbackStations as Station[]);
-    if (secureFallback.length) {
-      console.info(`Found ${secureFallback.length} HTTPS stations for fallback tag ${normalizedFallback}`);
-      return secureFallback;
+    
+    const secure = normalizeStations(stations as Station[], searchTag);
+    
+    if (secure.length) {
+      allSecureStations.push(...secure);
+    }
+  }
+  
+  if (allSecureStations.length) {
+    // Filter to only available stations
+    const availableStations = await filterAvailableStations(allSecureStations, 20);
+    
+    if (availableStations.length === 0) {
+      // If no stations are available, try fallback
+      console.warn(`No available stations found for tag "${tag}", trying fallback`);
+      throw new NoStationsError(`No available stations for tag "${tag}"`);
+    }
+    
+    // Shuffle array using Fisher-Yates algorithm
+    const shuffled = [...availableStations];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    
+    // Log the first station that will be selected
+    if (shuffled.length > 0) {
+      console.info(`Selected station: "${shuffled[0].name}" (${shuffled[0].urlResolved}) for tag "${tag}"`);
+    }
+    
+    console.info(`Found ${availableStations.length} available stations (from ${allSecureStations.length} total), returning shuffled array (original: ${tag})`);
+    return shuffled;
+  }
+
+  // Try fallback tag (use original tag for fallback lookup)
+  const fallbackTag = getFallbackTag(tag);
+  
+  if (fallbackTag) {
+    const normalizedFallback = normalizeTagForSearch(fallbackTag);
+    const fallbackTagVariants = normalizedFallback.split(',').map(t => t.trim()).filter(Boolean);
+    const allFallbackStations: ReturnType<typeof normalizeStations> = [];
+    
+    // Используем useRandomOrder для fallback тоже
+    const fallbackOrderType = useRandomOrder ? "random" : "clickCount";
+    
+    for (const searchTag of fallbackTagVariants) {
+      const fallbackStations = await withRetry(() => {
+        const query = {
+          tag: searchTag,
+          limit: 100,
+          order: fallbackOrderType as any,
+          reverse: false,
+          hideBroken: false,
+          lastcheckok: 1,
+        };
+        return radioBrowser.searchStations(query as any);
+      });
+      const secureFallback = normalizeStations(fallbackStations as Station[], searchTag);
+      if (secureFallback.length) {
+        allFallbackStations.push(...secureFallback);
+      }
+    }
+    
+    if (allFallbackStations.length) {
+      // Filter to only available stations
+      const availableFallbackStations = await filterAvailableStations(allFallbackStations, 20);
+      
+      if (availableFallbackStations.length === 0) {
+        throw new NoStationsError(`No available stations for tag "${tag}" (fallback also failed)`);
+      }
+      
+      // Shuffle array using Fisher-Yates algorithm
+      const shuffled = [...availableFallbackStations];
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      }
+      
+      // Log the first station that will be selected
+      if (shuffled.length > 0) {
+        console.info(`Selected fallback station: "${shuffled[0].name}" (${shuffled[0].urlResolved}) for tag "${tag}"`);
+      }
+      
+      console.info(`Found ${availableFallbackStations.length} available fallback stations (from ${allFallbackStations.length} total), returning shuffled array`);
+      return shuffled;
     }
   }
 
