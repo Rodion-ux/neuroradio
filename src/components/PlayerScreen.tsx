@@ -35,6 +35,10 @@ type PlayerScreenProps = {
   accentColor?: string;
   isFavorite: boolean;
   onToggleFavorite: () => void;
+  volume: number;
+  isMuted: boolean;
+  onVolumeChange: (value: number) => void;
+  onToggleMute: () => void;
 };
 
 const HeartIcon = ({
@@ -56,6 +60,45 @@ const HeartIcon = ({
   </svg>
 );
 
+const SpeakerIcon = ({
+  muted,
+  ...props
+}: SVGProps<SVGSVGElement> & { muted?: boolean }) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" {...props}>
+    <path
+      d="M4 10v4h4l5 4V6l-5 4H4z"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    {!muted && (
+      <>
+        <path
+          d="M16 9a4 4 0 0 1 0 6"
+          strokeWidth="2"
+          strokeLinecap="round"
+        />
+        <path
+          d="M18.5 6.5a7 7 0 0 1 0 11"
+          strokeWidth="2"
+          strokeLinecap="round"
+        />
+      </>
+    )}
+    {muted && <line x1="19" y1="5" x2="5" y2="19" strokeWidth="2" />}
+  </svg>
+);
+
+const lerp = (from: number, to: number, t: number) =>
+  Math.round(from + (to - from) * t);
+
+const lerpColor = (from: [number, number, number], to: [number, number, number], t: number) =>
+  [lerp(from[0], to[0], t), lerp(from[1], to[1], t), lerp(from[2], to[2], t)] as [
+    number,
+    number,
+    number,
+  ];
+
 export function PlayerScreen({
   stationName,
   currentTag,
@@ -74,6 +117,10 @@ export function PlayerScreen({
   accentColor,
   isFavorite,
   onToggleFavorite,
+  volume,
+  isMuted,
+  onVolumeChange,
+  onToggleMute,
 }: PlayerScreenProps) {
   const [copied, setCopied] = useState(false);
   const copyTimeoutRef = useRef<number | null>(null);
@@ -88,6 +135,8 @@ export function PlayerScreen({
   const trackLine = trackDisplay.toUpperCase();
   const shouldTrackMarquee = trackLine.length > 24;
   const trackMarqueeDuration = Math.max(10, trackLine.length * 0.5);
+  const statusLine = statusDetail ?? "";
+  const shouldStatusMarquee = statusLine.length > 34;
   const canCopy = Boolean(trackTitle?.trim());
   const glowColor = accentColor ?? "#ff77a8";
   const titleStyle: React.CSSProperties & { [key: string]: string | number } = {
@@ -95,6 +144,28 @@ export function PlayerScreen({
   };
   const trackStyle: React.CSSProperties & { [key: string]: string | number } | undefined =
     shouldTrackMarquee ? { ["--marquee-duration"]: `${trackMarqueeDuration}s` } : undefined;
+  const statusStyle: (React.CSSProperties & { [key: string]: string | number }) | undefined =
+    shouldStatusMarquee
+      ? { ["--marquee-duration"]: `${Math.max(10, statusLine.length * 0.45)}s` }
+      : undefined;
+  const volumeValue = isMuted ? 0 : volume;
+  const volumeColor = (() => {
+    const low: [number, number, number] = [74, 248, 255];
+    const mid: [number, number, number] = [166, 107, 255];
+    const high: [number, number, number] = [255, 119, 168];
+    if (volumeValue <= 0.4) {
+      return lerpColor(low, mid, volumeValue / 0.4);
+    }
+    if (volumeValue <= 0.8) {
+      return lerpColor(mid, high, (volumeValue - 0.4) / 0.4);
+    }
+    return high;
+  })();
+  const volumeColorVar = `${volumeColor[0]} ${volumeColor[1]} ${volumeColor[2]}`;
+  const volumeStyle: React.CSSProperties & { [key: string]: string | number } = {
+    ["--volume-fill"]: `${Math.round(volumeValue * 100)}%`,
+    ["--volume-track-color"]: volumeColorVar,
+  };
 
   if (shouldMarquee) {
     titleStyle["--marquee-duration"] = `${marqueeDuration}s`;
@@ -241,46 +312,46 @@ export function PlayerScreen({
               </div>
             </div>
 
-            <div className="flex w-full flex-wrap items-center justify-center gap-2 sm:gap-3">
+            <div className="flex w-full flex-nowrap items-center justify-center gap-4">
               <button
                 type="button"
                 onClick={onPrevStation}
-                className="pixel-button flex h-11 w-11 items-center justify-center rounded-2xl border-2 border-neon bg-black/40 backdrop-blur-md transition-transform hover:scale-105 active:scale-95 will-change-transform sm:h-12 sm:w-12"
+                className="pixel-button flex h-10 w-10 items-center justify-center rounded-2xl border-2 border-neon bg-black/40 backdrop-blur-md transition-transform hover:scale-105 active:scale-95 will-change-transform sm:h-12 sm:w-12"
               >
                 <Image
                   src="/icon-prev.svg"
                   alt="Previous station"
                   width={24}
                   height={24}
-                  className="h-6 w-6 sm:h-7 sm:w-7"
+                  className="h-5 w-5 sm:h-7 sm:w-7"
                   priority
                 />
               </button>
               <button
                 type="button"
                 onClick={onTogglePlay}
-                className="pixel-button flex h-12 w-12 items-center justify-center rounded-2xl border-2 border-neon bg-black/40 backdrop-blur-md transition-transform hover:scale-105 active:scale-95 will-change-transform sm:h-14 sm:w-14"
+                className="pixel-button flex h-11 w-11 items-center justify-center rounded-2xl border-2 border-neon bg-black/40 backdrop-blur-md transition-transform hover:scale-105 active:scale-95 will-change-transform sm:h-14 sm:w-14"
               >
                 <Image
                   src={isPlaying ? "/icon-pause.svg" : "/icon-play.svg"}
                   alt={isPlaying ? "Pause" : "Play"}
                   width={28}
                   height={28}
-                  className="h-7 w-7 sm:h-8 sm:w-8"
+                  className="h-6 w-6 sm:h-8 sm:w-8"
                   priority
                 />
               </button>
               <button
                 type="button"
                 onClick={onNextStation}
-                className="pixel-button flex h-11 w-11 items-center justify-center rounded-2xl border-2 border-neon bg-black/40 backdrop-blur-md transition-transform hover:scale-105 active:scale-95 will-change-transform sm:h-12 sm:w-12"
+                className="pixel-button flex h-10 w-10 items-center justify-center rounded-2xl border-2 border-neon bg-black/40 backdrop-blur-md transition-transform hover:scale-105 active:scale-95 will-change-transform sm:h-12 sm:w-12"
               >
                 <Image
                   src="/icon-next.svg"
                   alt="Next station"
                   width={24}
                   height={24}
-                  className="h-6 w-6 sm:h-7 sm:w-7"
+                  className="h-5 w-5 sm:h-7 sm:w-7"
                   priority
                 />
               </button>
@@ -288,7 +359,7 @@ export function PlayerScreen({
                 <motion.button
                   type="button"
                   onClick={handleFavoriteClick}
-                  className={`pixel-button relative flex h-11 w-11 items-center justify-center rounded-2xl border-2 border-neon bg-black/40 text-neon backdrop-blur-md transition-transform hover:scale-105 active:scale-95 will-change-transform sm:h-12 sm:w-12 ${
+                  className={`pixel-button relative flex h-10 w-10 items-center justify-center rounded-2xl border-2 border-neon bg-black/40 text-neon backdrop-blur-md transition-transform hover:scale-105 active:scale-95 will-change-transform sm:h-12 sm:w-12 ${
                     isFavorite ? "text-neon-bright" : ""
                   }`}
                   aria-label={isFavorite ? labels.removeFavorite : labels.addFavorite}
@@ -326,6 +397,51 @@ export function PlayerScreen({
                   )}
                 </AnimatePresence>
               </div>
+              <div className="hidden items-center gap-2 md:flex">
+                <button
+                  type="button"
+                  onClick={onToggleMute}
+                  className="flex h-9 w-9 items-center justify-center transition-transform hover:scale-105 active:scale-95 will-change-transform sm:h-10 sm:w-10"
+                  style={{ color: `rgb(${volumeColorVar})` }}
+                  aria-label={isMuted ? "Unmute" : "Mute"}
+                >
+                  <SpeakerIcon muted={isMuted} className="h-4 w-4 sm:h-5 sm:w-5" />
+                </button>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={volume}
+                  onChange={(event) => onVolumeChange(Number(event.target.value))}
+                  className={`volume-slider h-5 w-24 ${isMuted ? "opacity-60" : ""}`}
+                  style={volumeStyle}
+                  aria-label="Volume"
+                />
+              </div>
+            </div>
+
+            <div className="mt-2 flex w-full items-center gap-3 md:hidden">
+              <button
+                type="button"
+                onClick={onToggleMute}
+                className="flex h-9 w-9 items-center justify-center transition-transform hover:scale-105 active:scale-95 will-change-transform"
+                style={{ color: `rgb(${volumeColorVar})` }}
+                aria-label={isMuted ? "Unmute" : "Mute"}
+              >
+                <SpeakerIcon muted={isMuted} className="h-4 w-4" />
+              </button>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.01}
+                value={volume}
+                onChange={(event) => onVolumeChange(Number(event.target.value))}
+                className={`volume-slider h-5 w-full ${isMuted ? "opacity-60" : ""}`}
+                style={volumeStyle}
+                aria-label="Volume"
+              />
             </div>
 
             <button
@@ -377,9 +493,16 @@ export function PlayerScreen({
               </p>
             )}
             {statusDetail && (
-              <p className="text-[7px] uppercase tracking-[0.25em] text-neon/50 sm:text-[9px] sm:tracking-[0.3em]">
-                {statusDetail}
-              </p>
+              <div className={shouldStatusMarquee ? "marquee" : ""}>
+                <p
+                  className={`text-[7px] uppercase tracking-[0.25em] text-neon/50 sm:text-[9px] sm:tracking-[0.3em] ${
+                    shouldStatusMarquee ? "marquee-track" : ""
+                  }`}
+                  style={statusStyle}
+                >
+                  {statusDetail}
+                </p>
+              </div>
             )}
           </div>
 

@@ -258,6 +258,118 @@ body {
   border: 2px solid #000;
 }
 
+.volume-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 16px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.volume-slider::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 3px;
+  background: linear-gradient(
+    90deg,
+    rgb(var(--volume-track-color, 255 119 168)) var(--volume-fill),
+    rgba(12, 8, 14, 0.9) var(--volume-fill)
+  );
+  box-shadow: 0 0 10px rgb(var(--volume-track-color, 255 119 168) / 0.5);
+}
+
+.volume-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  margin-top: -5px;
+  height: 16px;
+  width: 16px;
+  border-radius: 3px;
+  background: rgb(var(--volume-track-color, 255 119 168));
+  box-shadow:
+    0 0 8px rgb(var(--volume-track-color, 255 119 168) / 0.7),
+    0 0 16px rgb(var(--volume-track-color, 255 119 168) / 0.45);
+  border: 2px solid #0b070c;
+}
+
+.volume-slider::-moz-range-track {
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(12, 8, 14, 0.9);
+}
+
+.volume-slider::-moz-range-progress {
+  height: 6px;
+  border-radius: 3px;
+  background: rgb(var(--volume-track-color, 255 119 168));
+  box-shadow: 0 0 10px rgb(var(--volume-track-color, 255 119 168) / 0.5);
+}
+
+.volume-slider::-moz-range-thumb {
+  height: 16px;
+  width: 16px;
+  border-radius: 3px;
+  background: rgb(var(--volume-track-color, 255 119 168));
+  border: 2px solid #0b070c;
+  box-shadow:
+    0 0 8px rgb(var(--volume-track-color, 255 119 168) / 0.7),
+    0 0 16px rgb(var(--volume-track-color, 255 119 168) / 0.45);
+}
+
+.pixel-disintegrate {
+  position: relative;
+}
+
+.pixel-burst {
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  background: var(--neon);
+  box-shadow: 0 0 8px rgba(255, 119, 168, 0.8);
+  animation: pixelBurst 0.5s steps(2, end) forwards;
+}
+
+.pixel-burst-1 {
+  top: 15%;
+  left: 10%;
+  animation-delay: 0s;
+}
+.pixel-burst-2 {
+  top: 35%;
+  left: 75%;
+  animation-delay: 0.02s;
+}
+.pixel-burst-3 {
+  top: 60%;
+  left: 35%;
+  animation-delay: 0.04s;
+}
+.pixel-burst-4 {
+  top: 20%;
+  left: 55%;
+  animation-delay: 0.06s;
+}
+.pixel-burst-5 {
+  top: 70%;
+  left: 80%;
+  animation-delay: 0.08s;
+}
+.pixel-burst-6 {
+  top: 50%;
+  left: 5%;
+  animation-delay: 0.1s;
+}
+
+@keyframes pixelBurst {
+  0% {
+    transform: translate(0, 0) scale(1);
+    opacity: 1;
+  }
+  100% {
+    transform: translate(10px, -12px) scale(0);
+    opacity: 0;
+  }
+}
+
 /* visualizer bars are driven by Web Audio API */
 .visualizer-active .visualizer-bar {
   transition: transform 90ms linear;

@@ -48,7 +48,7 @@ const normalizeStations = (stations: Station[]) =>
 class NoStationsError extends Error {}
 
 export async function POST(request: NextRequest) {
-  let body: { tag?: string } = {};
+  let body: { tag?: string; useRandomOrder?: boolean } = {};
 
   try {
     body = await request.json();
@@ -61,10 +61,11 @@ export async function POST(request: NextRequest) {
 
     const rawTag = typeof body.tag === "string" ? body.tag.trim() : "";
     const tag = rawTag.length ? rawTag.toLowerCase() : "lofi";
-    console.info("Radio stations requested for tag:", tag);
+    const useRandomOrder = body.useRandomOrder === true;
+    console.info("Radio stations requested for tag:", tag, "| randomOrder:", useRandomOrder);
 
     await ensureBaseUrl();
-    const stations = await fetchSecureStationsForTag(tag);
+    const stations = await fetchSecureStationsForTag(tag, useRandomOrder);
     return NextResponse.json({ tag, stations });
   } catch (error) {
     console.error("RADIO API ERROR:", error);
@@ -81,15 +82,15 @@ export async function POST(request: NextRequest) {
   }
 }
 
-const fetchSecureStationsForTag = async (tag: string) => {
+const fetchSecureStationsForTag = async (tag: string, useRandomOrder = false) => {
   const MAX_ATTEMPTS = 3;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
     const stations = await withRetry(() => {
       const query = {
         tag,
         limit: 20,
-        order: "clickCount" as const,
-        reverse: true,
+        order: (useRandomOrder ? "random" : "clickCount") as const,
+        reverse: !useRandomOrder,
         hideBroken: false,
         lastcheckok: 1,
       };

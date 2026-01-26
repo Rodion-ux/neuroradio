@@ -28,6 +28,7 @@ type FavoriteStation = {
 };
 
 const FAVORITES_KEY = "neuroradio_favorites";
+const VOLUME_KEY = "neuroradio_volume";
 
 const readFavorites = (): FavoriteStation[] => {
   if (typeof window === "undefined") return [];
@@ -128,8 +129,8 @@ const translations = {
     EN: "SIGNAL LOCKED!",
   },
   vibeDetail: {
-    RU: "ВАЙБ: {category} | НАСТРОЙКА: {genre}",
-    EN: "VIBE: {category} | TUNING TO: {genre}",
+    RU: "ПОДБИРАЕМ ВАЙБ: {category} → {genre}",
+    EN: "MATCHING VIBE: {category} → {genre}",
   },
   scanningAirwaves: {
     RU: "СКАНИРУЮ ЭФИР: {tag}....",
@@ -226,6 +227,7 @@ export default function Home() {
   const [statusText, setStatusText] = useState<string | undefined>(undefined);
   const [statusDetail, setStatusDetail] = useState<string | undefined>(undefined);
   const [favorites, setFavorites] = useState<FavoriteStation[]>([]);
+  const [volume, setVolume] = useState(0.7);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audioReadyRef = useRef(false);
   const sessionRef = useRef(0);
@@ -240,6 +242,10 @@ export default function Home() {
   const sourceRef = useRef<MediaElementAudioSourceNode | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const audioLevelRef = useRef(0.25);
+  const volumeFadeRef = useRef<number | null>(null);
+  const lastAudibleVolumeRef = useRef(0.7);
+
+  const isMuted = volume === 0;
 
   const t = (key: TranslationKey) => translations[key][lang];
   const format = (key: TranslationKey, params: Record<string, string>) => {
@@ -257,8 +263,61 @@ export default function Home() {
   }, [stations]);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    const raw = window.localStorage.getItem(VOLUME_KEY);
+    if (raw === null) return;
+    const parsed = Number.parseFloat(raw);
+    if (!Number.isFinite(parsed)) return;
+    const clamped = Math.min(1, Math.max(0, parsed));
+    setVolume(clamped);
+    if (clamped > 0) {
+      lastAudibleVolumeRef.current = clamped;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(VOLUME_KEY, volume.toString());
+  }, [volume]);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (volumeFadeRef.current) {
+      cancelAnimationFrame(volumeFadeRef.current);
+      volumeFadeRef.current = null;
+    }
+    audio.volume = volume;
+  }, [volume]);
+
+  useEffect(() => {
     activeTagRef.current = activeTag;
   }, [activeTag]);
+
+  const fadeToVolume = (target: number) => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (volumeFadeRef.current) {
+      cancelAnimationFrame(volumeFadeRef.current);
+      volumeFadeRef.current = null;
+    }
+    const startVolume = audio.volume;
+    const duration = 700;
+    const startTime = performance.now();
+
+    const step = (timestamp: number) => {
+      const progress = Math.min(1, (timestamp - startTime) / duration);
+      const eased = progress * progress * (3 - 2 * progress);
+      audio.volume = startVolume + (target - startVolume) * eased;
+      if (progress < 1) {
+        volumeFadeRef.current = requestAnimationFrame(step);
+      } else {
+        volumeFadeRef.current = null;
+      }
+    };
+
+    volumeFadeRef.current = requestAnimationFrame(step);
+  };
 
   useEffect(() => {
     setFavorites(readFavorites());
@@ -382,7 +441,7 @@ export default function Home() {
     setupAudio(audio);
     audio.src = station.urlResolved;
     audio.loop = false;
-    audio.volume = 0.75;
+    audio.volume = 0;
     audio.preload = "none";
     audio.crossOrigin = "anonymous";
     let hasPlaybackSignal = false;
@@ -404,6 +463,9 @@ export default function Home() {
       await audio.play();
       failedCountRef.current = 0;
       setStatusText(undefined);
+      if (volume > 0) {
+        fadeToVolume(volume);
+      }
     } catch {
       if (audio.error) {
         void handleStreamError("playback error");
@@ -413,11 +475,11 @@ export default function Home() {
     }
   };
 
-  const fetchStations = async (tag: string) => {
+  const fetchStations = async (tag: string, useRandomOrder = false) => {
     const requestTag = tag.trim().toLowerCase();
     const response = await fetch("/api/generate", {
       method: "POST",
-      body: JSON.stringify({ tag: requestTag }),
+      body: JSON.stringify({ tag: requestTag, useRandomOrder }),
       headers: { "Content-Type": "application/json" },
     });
 
@@ -438,7 +500,10 @@ export default function Home() {
     sessionRef.current = sessionId;
     const isQuickTag = Boolean(tagOverride);
     const processed = isQuickTag ? null : processTextInput(userActivity);
-    const initialTag = (isQuickTag ? tagOverride : processed?.tag) ?? "lofi";
+    const initialTag = isQuickTag
+      ? (tagOverride ?? "lofi").toLowerCase().trim()
+      : (processed?.tag ?? "lofi");
+    const useRandomOrder = isQuickTag ? true : (processed?.useRandomOrder ?? false);
     setStationTag(initialTag.toUpperCase());
     setActiveTag(initialTag);
     setScreen("loading");
@@ -458,9 +523,6 @@ export default function Home() {
           genre: processed.genre,
         })
       );
-      console.log(
-        `User Input: ${userActivity}, Matched Vibe: ${processed.category}, Selected Genre: ${processed.genre}`
-      );
     } else {
       setStatusDetail(
         format("vibeDetail", { category: "DIRECT", genre: "lofi" })
@@ -475,10 +537,12 @@ export default function Home() {
       let secureIndex = -1;
 
       for (let attempt = 0; attempt < 3 && secureIndex === -1; attempt += 1) {
-        const result = await fetchStations(resolvedTag);
+        const result = await fetchStations(resolvedTag, useRandomOrder);
         if (sessionId !== sessionRef.current) return;
         stationList = result.stations;
-        resolvedTag = result.tag;
+        if (!isQuickTag) {
+          resolvedTag = result.tag;
+        }
         setStationTag(resolvedTag.toUpperCase());
         setActiveTag(resolvedTag);
 
@@ -579,6 +643,10 @@ export default function Home() {
 
   const handleStop = () => {
     sessionRef.current += 1;
+    if (volumeFadeRef.current) {
+      cancelAnimationFrame(volumeFadeRef.current);
+      volumeFadeRef.current = null;
+    }
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current.src = "";
@@ -603,11 +671,35 @@ export default function Home() {
       return;
     }
     try {
+      if (volumeFadeRef.current) {
+        cancelAnimationFrame(volumeFadeRef.current);
+        volumeFadeRef.current = null;
+      }
+      audioRef.current.volume = volume;
       await audioRef.current.play();
       setPlaybackState("playing");
     } catch {
       setPlaybackState("blocked");
     }
+  };
+
+  const handleVolumeChange = (nextVolume: number) => {
+    const clamped = Math.min(1, Math.max(0, nextVolume));
+    setVolume(clamped);
+    if (clamped > 0) {
+      lastAudibleVolumeRef.current = clamped;
+    }
+  };
+
+  const handleToggleMute = () => {
+    if (volume > 0) {
+      lastAudibleVolumeRef.current = volume;
+      setVolume(0);
+      return;
+    }
+    const restored =
+      lastAudibleVolumeRef.current > 0 ? lastAudibleVolumeRef.current : 0.7;
+    setVolume(Math.min(1, Math.max(0, restored)));
   };
 
   const handleNextStation = () => {
@@ -754,6 +846,10 @@ export default function Home() {
         accentColor={resolveAccentColor(activeTag)}
         isFavorite={isFavorite}
         onToggleFavorite={handleToggleFavorite}
+        volume={volume}
+        isMuted={isMuted}
+        onVolumeChange={handleVolumeChange}
+        onToggleMute={handleToggleMute}
       />
     );
   }
@@ -772,11 +868,19 @@ export default function Home() {
         startButton: t("startButton"),
         quickVibes: t("quickVibes"),
         favoritesTitle: t("favoritesTitle"),
+        removeFavorite: t("removeFavorite"),
       }}
       lang={lang}
       onSetLang={setLangValue}
       favorites={favorites}
       onPlayFavorite={handlePlayFavorite}
+      onRemoveFavorite={(id) => {
+        setFavorites((prev) => {
+          const next = prev.filter((item) => item.changeuuid !== id);
+          writeFavorites(next);
+          return next;
+        });
+      }}
     />
   );
 }

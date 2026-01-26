@@ -1,82 +1,42 @@
-type VibeCategory = {
-  keywords: string[];
+type SemanticCategory = {
+  pattern: RegExp;
   genres: string[];
 };
 
-const VIBE_MAP: Record<string, VibeCategory> = {
-  GRIND: {
-    keywords: [
-      "ебашу",
-      "hard work",
-      "дедлайн",
-      "grind",
-      "фигачу",
-      "аврал",
-      "скорость",
-      "burnout",
-    ],
-    genres: ["techno", "phonk", "hardstyle", "industrial", "metal"],
+const SEMANTIC_CATEGORIES: Record<string, SemanticCategory> = {
+  HOUSEHOLD: {
+    pattern:
+      /(уборка|убираю|мою|посуда|готовлю|кухня|глажу|ремонт|быт|cleaning|cooking|chores|kitchen)/i,
+    genres: ["disco", "funk", "pop", "house", "motown", "indie pop"],
   },
-  FOCUS: {
-    keywords: [
-      "код",
-      "дебаг",
-      "логика",
-      "пишу",
-      "отчет",
-      "crm",
-      "focus",
-      "study",
-      "учеба",
-    ],
-    genres: ["minimal techno", "deep house", "liquid dnb", "ambient"],
+  STUDY_READ: {
+    pattern:
+      /(уроки|учусь|читаю|книга|экзамен|сессия|дз|study|reading|homework|book|library)/i,
+    genres: ["classical", "baroque", "piano", "soundtrack", "ambient", "light jazz"],
   },
-  CREATIVE: {
-    keywords: [
-      "дизайн",
-      "арт",
-      "фигма",
-      "figma",
-      "рендер",
-      "voxel",
-      "3d",
-      "creative",
-    ],
-    genres: ["chillout", "downtempo", "lofi", "future garage"],
+  COMMUTE: {
+    pattern:
+      /(еду|метро|автобус|пробка|маршрутка|пешком|иду|гуляю|дорога|commute|traffic|bus|walk|subway)/i,
+    genres: ["lofi", "indie", "alternative", "shoegaze", "synthwave"],
   },
-  ACTION: {
-    keywords: [
-      "зал",
-      "уборка",
-      "бег",
-      "тренировка",
-      "gym",
-      "workout",
-      "дела",
-      "активно",
-    ],
-    genres: ["drum and bass", "bass house", "electro house", "energy"],
+  PARTY_SOCIAL: {
+    pattern:
+      /(туса|вечеринка|гости|бухаю|пью|танцы|пятница|др|party|drink|dance|club|friends)/i,
+    genres: ["house", "techno", "hip hop", "rnb", "dance", "edm"],
   },
-  RELAX: {
-    keywords: [
-      "отдых",
-      "вечер",
-      "устал",
-      "лежу",
-      "ванна",
-      "чилл",
-      "relax",
-      "chill",
-    ],
-    genres: ["soul", "smooth jazz", "bossa nova", "lounge"],
+  ROMANCE: {
+    pattern:
+      /(свидание|любовь|секс|ужин|романтика|date|love|romantic|dinner|candle)/i,
+    genres: ["rnb", "soul", "smooth jazz", "bossa nova", "blues"],
   },
-  GAMING: {
-    keywords: ["играю", "катка", "квест", "турнир", "стрим", "play", "gaming"],
-    genres: ["chiptune", "8-bit", "future bass", "synth-pop"],
+  MOOD_SAD: {
+    pattern:
+      /(грустно|плохо|депрессия|дождь|одиноко|sad|cry|lonely|rain|blue)/i,
+    genres: ["indie folk", "sad piano", "acoustic", "slowcore", "post-rock"],
   },
-  NIGHT_DRIVE: {
-    keywords: ["еду", "машина", "ночь", "дорога", "night", "drive", "car"],
-    genres: ["synthwave", "vaporwave", "dark wave", "retrowave"],
+  WORK_OFFICE: {
+    pattern: /(офис|работа|отчет|эксель|письма|клиенты|office|work|excel|mail)/i,
+    genres: ["lounge", "chillout", "soft house", "deep house"],
   },
 };
 
@@ -115,9 +75,11 @@ const pickRandom = (items: string[]) =>
   items[Math.floor(Math.random() * items.length)];
 
 export const processTextInput = (input: string) => {
+  const original = input;
   const normalized = normalizeInput(input);
   const words = normalized.split(" ").filter(Boolean);
 
+  // 1. Direct genre match (user explicitly typed a genre name)
   const directGenre = GENRE_ALIASES.find(({ aliases }) =>
     aliases.some((alias) => {
       if (alias.includes(" ") || alias.includes("-")) {
@@ -128,55 +90,48 @@ export const processTextInput = (input: string) => {
   );
 
   if (directGenre) {
+    console.log(
+      `[Radio Engine] Original: "${original}" | Category: DIRECT | Genre: ${directGenre.tag}`
+    );
     return {
       category: "DIRECT",
       genre: directGenre.tag,
       tag: directGenre.tag,
+      useRandomOrder: false,
     };
   }
 
-  for (const [category, config] of Object.entries(VIBE_MAP)) {
-    const exactMatch = config.keywords.some((keyword) => {
-      if (keyword.includes(" ")) {
-        return normalized.includes(keyword);
-      }
-      return words.includes(keyword);
-    });
-    if (exactMatch) {
+  // 2. Semantic category match via regex patterns
+  for (const [category, config] of Object.entries(SEMANTIC_CATEGORIES)) {
+    if (config.pattern.test(normalized)) {
       const genre = pickRandom(config.genres);
+      console.log(
+        `[Radio Engine] Original: "${original}" | Category: ${category} | Genre: ${genre}`
+      );
       return {
         category,
         genre,
         tag: genre,
+        useRandomOrder: true,
       };
     }
   }
 
-  for (const [category, config] of Object.entries(VIBE_MAP)) {
-    const partialMatch = config.keywords.some((keyword) => {
-      if (keyword.includes(" ")) {
-        return false;
-      }
-      return words.some((word) => word.includes(keyword));
-    });
-    if (partialMatch) {
-      const genre = pickRandom(config.genres);
-      return {
-        category,
-        genre,
-        tag: genre,
-      };
-    }
-  }
-
+  // 3. Fallback: use the longest word as a direct tag
   const fallback = words.reduce(
     (longest, word) => (word.length > longest.length ? word : longest),
     ""
   );
 
+  const finalTag = fallback || "lofi";
+  console.log(
+    `[Radio Engine] Original: "${original}" | Category: FALLBACK | Genre: ${finalTag}`
+  );
+
   return {
-    category: "DIRECT",
-    genre: fallback || "lofi",
-    tag: fallback || "lofi",
+    category: "FALLBACK",
+    genre: finalTag,
+    tag: finalTag,
+    useRandomOrder: false,
   };
 };

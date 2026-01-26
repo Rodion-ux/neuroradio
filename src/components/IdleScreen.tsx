@@ -1,7 +1,9 @@
 "use client";
 
-import { useState, FormEvent } from "react";
+import { useEffect, useRef, useState, FormEvent } from "react";
 import { BackgroundFx } from "./BackgroundFx";
+import type { SVGProps } from "react";
+import { motion } from "framer-motion";
 
 type IdleScreenLabels = {
   tagLine: string;
@@ -12,6 +14,7 @@ type IdleScreenLabels = {
   startButton: string;
   quickVibes: string;
   favoritesTitle: string;
+  removeFavorite: string;
 };
 
 type IdleScreenProps = {
@@ -33,7 +36,27 @@ type IdleScreenProps = {
     tags: string[];
     favicon?: string;
   }) => void;
+  onRemoveFavorite?: (id: string) => void;
 };
+
+const HeartIcon = ({
+  filled,
+  ...props
+}: SVGProps<SVGSVGElement> & { filled?: boolean }) => (
+  <svg
+    viewBox="0 0 24 24"
+    fill={filled ? "currentColor" : "none"}
+    stroke="currentColor"
+    {...props}
+  >
+    <path
+      d="M12 20s-7-4.5-7-10a4 4 0 0 1 7-2 4 4 0 0 1 7 2c0 5.5-7 10-7 10Z"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
 
 const quickTags = [
   "LO-FI",
@@ -59,13 +82,38 @@ export function IdleScreen({
   onSetLang,
   favorites,
   onPlayFavorite,
+  onRemoveFavorite,
 }: IdleScreenProps) {
   const [activity, setActivity] = useState("");
+  const [removingIds, setRemovingIds] = useState<Set<string>>(new Set());
+  const removalTimersRef = useRef<Map<string, number>>(new Map());
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
     const trimmed = activity.trim();
     onStart(trimmed);
+  };
+
+  useEffect(() => {
+    return () => {
+      removalTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+      removalTimersRef.current.clear();
+    };
+  }, []);
+
+  const handleRemoveFavorite = (id: string) => {
+    if (removingIds.has(id)) return;
+    setRemovingIds((prev) => new Set(prev).add(id));
+    const timer = window.setTimeout(() => {
+      onRemoveFavorite?.(id);
+      setRemovingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+      removalTimersRef.current.delete(id);
+    }, 520);
+    removalTimersRef.current.set(id, timer);
   };
 
   return (
@@ -141,13 +189,13 @@ export function IdleScreen({
           </form>
 
           <div className="mt-1 flex w-full max-w-2xl flex-col gap-3 sm:mt-2 sm:gap-4">
-            <p className="text-[9px] uppercase tracking-[0.3em] text-neon/80 sm:text-xs sm:tracking-[0.35em]">
+            <p className="text-center text-[9px] uppercase tracking-[0.3em] text-neon/80 sm:text-xs sm:tracking-[0.35em]">
               {labels.quickVibes}
             </p>
             <div className="relative">
               <div className="pointer-events-none absolute inset-y-0 left-0 z-10 w-6 bg-gradient-to-r from-[var(--background)] to-transparent md:hidden" />
               <div className="pointer-events-none absolute inset-y-0 right-0 z-10 w-6 bg-gradient-to-l from-[var(--background)] to-transparent md:hidden" />
-              <div className="flex w-full gap-3 overflow-x-auto overflow-y-visible pb-2 sm:grid sm:grid-cols-3 sm:gap-3 sm:pb-0 lg:grid-cols-4 md:overflow-visible">
+              <div className="flex flex-nowrap w-full gap-3 overflow-x-auto overflow-y-visible pb-2 justify-start md:flex-wrap md:justify-center md:gap-2 md:max-w-4xl md:mx-auto md:overflow-visible md:pb-0">
                 {quickTags.map((tag) => (
                   <button
                     key={tag}
@@ -164,23 +212,58 @@ export function IdleScreen({
 
           {favorites && favorites.length > 0 && (
             <div className="mt-3 flex w-full max-w-2xl flex-col gap-3 sm:mt-6 sm:gap-4">
-              <p className="text-[9px] uppercase tracking-[0.3em] text-neon/80 sm:text-xs sm:tracking-[0.35em]">
+              <p className="text-center text-[9px] uppercase tracking-[0.3em] text-neon/80 sm:text-xs sm:tracking-[0.35em]">
                 {labels.favoritesTitle}
               </p>
               <div className="relative">
-                <div className="pointer-events-none absolute inset-y-0 left-0 z-10 w-6 bg-gradient-to-r from-[var(--background)] to-transparent" />
-                <div className="pointer-events-none absolute inset-y-0 right-0 z-10 w-6 bg-gradient-to-l from-[var(--background)] to-transparent" />
-                <div className="flex w-full snap-x snap-mandatory gap-3 overflow-x-auto overflow-y-visible pb-2 md:overflow-visible">
+                <div className="pointer-events-none absolute inset-y-0 left-0 z-10 w-6 bg-gradient-to-r from-[var(--background)] to-transparent md:hidden" />
+                <div className="pointer-events-none absolute inset-y-0 right-0 z-10 w-6 bg-gradient-to-l from-[var(--background)] to-transparent md:hidden" />
+                <div className="flex flex-nowrap w-full snap-x snap-mandatory gap-3 overflow-x-auto overflow-y-visible pb-2 justify-start md:flex-wrap md:justify-center md:gap-2 md:max-w-4xl md:mx-auto md:overflow-visible md:pb-0">
                   {favorites.map((station) => (
-                    <button
+                    <motion.div
                       key={station.changeuuid}
-                      type="button"
-                      onClick={() => onPlayFavorite?.(station)}
-                      className="pixel-tag relative shrink-0 snap-start rounded-2xl px-3 py-2 text-[9px] uppercase tracking-[0.22em] text-neon transition hover:z-50 hover:bg-neon hover:text-[#2d1b2e] hover:scale-105 active:scale-95 will-change-transform sm:px-4 sm:py-3 sm:text-[10px]"
-                      title={station.name}
+                      className={`flex shrink-0 snap-start items-center gap-2 ${
+                        removingIds.has(station.changeuuid) ? "pixel-disintegrate" : ""
+                      }`}
+                      animate={
+                        removingIds.has(station.changeuuid)
+                          ? { opacity: 0, scale: 0.85 }
+                          : { opacity: 1, scale: 1 }
+                      }
+                      transition={{ duration: 0.5, ease: "easeOut" }}
                     >
-                      {station.name.toUpperCase()}
-                    </button>
+                      <div className="relative">
+                        <button
+                        type="button"
+                        onClick={() => onPlayFavorite?.(station)}
+                        className="pixel-tag relative rounded-2xl px-3 py-2 text-[9px] uppercase tracking-[0.22em] text-neon transition hover:z-50 hover:bg-neon hover:text-[#2d1b2e] hover:scale-105 active:scale-95 will-change-transform sm:px-4 sm:py-3 sm:text-[10px]"
+                        title={station.name}
+                      >
+                        {station.name.toUpperCase()}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          handleRemoveFavorite(station.changeuuid);
+                        }}
+                        className="absolute -right-2 -top-2 flex h-6 w-6 items-center justify-center rounded-full border-2 border-neon bg-black/70 text-neon transition hover:bg-neon hover:text-[#2d1b2e] hover:scale-105 active:scale-95 will-change-transform sm:h-7 sm:w-7"
+                        aria-label={labels.removeFavorite}
+                      >
+                        <HeartIcon className="h-3.5 w-3.5" filled />
+                      </button>
+                      {removingIds.has(station.changeuuid) && (
+                        <div className="pointer-events-none absolute inset-0">
+                          <span className="pixel-burst pixel-burst-1" />
+                          <span className="pixel-burst pixel-burst-2" />
+                          <span className="pixel-burst pixel-burst-3" />
+                          <span className="pixel-burst pixel-burst-4" />
+                          <span className="pixel-burst pixel-burst-5" />
+                          <span className="pixel-burst pixel-burst-6" />
+                        </div>
+                      )}
+                    </div>
+                    </motion.div>
                   ))}
                 </div>
               </div>
