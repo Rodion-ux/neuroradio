@@ -18,6 +18,7 @@ type PlayerScreenProps = {
   isPlaying: boolean;
   statusText?: string;
   statusDetail?: string;
+  aiReasoning?: string;
   labels: {
     nowPlaying: string;
     genre: string;
@@ -110,6 +111,7 @@ export function PlayerScreen({
   isPlaying,
   statusText,
   statusDetail,
+  aiReasoning,
   labels,
   lang,
   onSetLang,
@@ -276,6 +278,17 @@ export function PlayerScreen({
             <p className="text-[8px] uppercase tracking-[0.25em] text-neon/70 sm:text-[10px] sm:tracking-[0.3em]">
               {labels.genre}: {tagLabel}
             </p>
+            {aiReasoning && (
+              <motion.p
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 0.7 }}
+                transition={{ duration: 0.5 }}
+                className="text-[7px] font-mono tracking-[0.15em] text-neon/70 sm:text-[8px] sm:tracking-[0.2em]"
+                style={{ opacity: 0.7 }}
+              >
+                {aiReasoning}
+              </motion.p>
+            )}
 
             <div className="mt-1 flex w-full items-center justify-center sm:mt-2">
               <div
@@ -444,40 +457,42 @@ export function PlayerScreen({
               />
             </div>
 
-            <button
-              type="button"
-              onClick={handleCopy}
-              disabled={!canCopy}
-              className={`relative mt-2 w-full max-w-2xl rounded-2xl border-2 border-neon bg-black/40 px-4 py-2 text-center backdrop-blur-md transition-transform will-change-transform sm:mt-4 sm:py-3 ${
-                canCopy ? "hover:scale-105 active:scale-95" : "cursor-default opacity-80"
-              }`}
-              aria-label={trackLine}
-            >
-              <div className={shouldTrackMarquee ? "marquee" : ""}>
-                <p
-                  className={`text-[8px] uppercase tracking-[0.24em] text-neon-bright sm:text-[9px] sm:tracking-[0.32em] ${
-                    shouldTrackMarquee ? "marquee-track" : ""
-                  }`}
-                  style={trackStyle}
-                >
-                  {trackLine}
-                  {shouldTrackMarquee ? ` • ${trackLine}` : ""}
-                </p>
-              </div>
-              <AnimatePresence>
-                {copied && (
-                  <motion.span
-                    initial={{ opacity: 0, y: 6, scale: 0.9 }}
-                    animate={{ opacity: 1, y: 0, scale: 1 }}
-                    exit={{ opacity: 0, y: -6, scale: 0.95 }}
-                    transition={{ duration: 0.2 }}
-                    className="pointer-events-none absolute right-3 top-2 text-[8px] uppercase tracking-[0.3em] text-neon-bright"
+            {trackTitle?.trim() && (
+              <button
+                type="button"
+                onClick={handleCopy}
+                disabled={!canCopy}
+                className={`relative mt-2 w-full max-w-2xl rounded-2xl border-2 border-neon bg-black/40 px-4 py-2 text-center backdrop-blur-md transition-transform will-change-transform sm:mt-4 sm:py-3 ${
+                  canCopy ? "hover:scale-105 active:scale-95" : "cursor-default opacity-80"
+                }`}
+                aria-label={trackLine}
+              >
+                <div className={shouldTrackMarquee ? "marquee" : ""}>
+                  <p
+                    className={`text-[8px] uppercase tracking-[0.24em] text-neon-bright sm:text-[9px] sm:tracking-[0.32em] ${
+                      shouldTrackMarquee ? "marquee-track" : ""
+                    }`}
+                    style={trackStyle}
                   >
-                    {labels.copied}
-                  </motion.span>
-                )}
-              </AnimatePresence>
-            </button>
+                    {trackLine}
+                    {shouldTrackMarquee ? ` • ${trackLine}` : ""}
+                  </p>
+                </div>
+                <AnimatePresence>
+                  {copied && (
+                    <motion.span
+                      initial={{ opacity: 0, y: 6, scale: 0.9 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: -6, scale: 0.95 }}
+                      transition={{ duration: 0.2 }}
+                      className="pointer-events-none absolute right-3 top-2 text-[8px] uppercase tracking-[0.3em] text-neon-bright"
+                    >
+                      {labels.copied}
+                    </motion.span>
+                  )}
+                </AnimatePresence>
+              </button>
+            )}
 
             <button
               type="button"

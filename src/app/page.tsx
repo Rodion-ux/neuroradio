@@ -116,6 +116,14 @@ const translations = {
     RU: "СТАНЦИЯ НЕСТАБИЛЬНА — ПЕРЕКЛЮЧЕНИЕ...",
     EN: "STATION UNSTABLE — SKIPPING...",
   },
+  aiThinking: {
+    RU: "AI ДУМАЕТ...",
+    EN: "AI THINKING...",
+  },
+  aiAnalyzing: {
+    RU: "[ СКАНИРУЮ КОНТЕКСТ... ]",
+    EN: "[ ANALYZING VIBE... ]",
+  },
   statusNoStations: {
     RU: "НЕТ ДОСТУПНЫХ СТАНЦИЙ",
     EN: "NO LIVE STATIONS RESPONDING",
@@ -133,8 +141,8 @@ const translations = {
     EN: "SIGNAL LOCKED!",
   },
   vibeDetail: {
-    RU: "ПОДБИРАЕМ ВАЙБ: {category} → {genre}",
-    EN: "MATCHING VIBE: {category} → {genre}",
+    RU: "VIBE MATCHED: {genre}",
+    EN: "VIBE MATCHED: {genre}",
   },
   scanningAirwaves: {
     RU: "СКАНИРУЮ ЭФИР: {tag}....",
@@ -230,6 +238,7 @@ export default function Home() {
   const [playbackState, setPlaybackState] = useState<PlaybackState>("idle");
   const [statusText, setStatusText] = useState<string | undefined>(undefined);
   const [statusDetail, setStatusDetail] = useState<string | undefined>(undefined);
+  const [aiReasoning, setAiReasoning] = useState("");
   const [favorites, setFavorites] = useState<FavoriteStation[]>([]);
   const [volume, setVolume] = useState(0.7);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -239,7 +248,6 @@ export default function Home() {
   const stationIndexRef = useRef(0);
   const failedCountRef = useRef(0);
   const activeTagRef = useRef("lofi");
-  const isSwitchingRef = useRef(false);
   const activeStationUrlRef = useRef<string | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
@@ -344,10 +352,8 @@ export default function Home() {
   }, [isConnecting]);
 
   const handleStreamError = async (reason?: string) => {
-    if (isSwitchingRef.current) return;
     const list = stationsRef.current;
     if (!list.length) return;
-    isSwitchingRef.current = true;
     failedCountRef.current += 1;
     
     if (audioRef.current) {
@@ -373,7 +379,6 @@ export default function Home() {
         if (!refreshed.length) {
           setStatusText(t("statusNoStations"));
           setPlaybackState("blocked");
-          isSwitchingRef.current = false;
           return;
         }
         setStations(refreshed);
@@ -381,19 +386,16 @@ export default function Home() {
         failedCountRef.current = 0;
         const randomIndex = Math.floor(Math.random() * refreshed.length);
         await startStationPlayback(randomIndex);
-        isSwitchingRef.current = false;
         return;
       } catch {
         setStatusText(t("statusNoStations"));
         setPlaybackState("blocked");
-        isSwitchingRef.current = false;
         return;
       }
     }
 
     const nextIndex = (stationIndexRef.current + 1) % list.length;
     await startStationPlayback(nextIndex);
-    isSwitchingRef.current = false;
   };
 
   const setupAudio = (audio: HTMLAudioElement) => {
@@ -522,7 +524,9 @@ export default function Home() {
 
   const fetchStations = async (tag: string, useRandomOrder = false) => {
     const requestTag = tag.trim().toLowerCase();
-    const response = await fetch("/api/generate", {
+    // Добавляем timestamp для обхода кеша браузера
+    const cacheBuster = Date.now();
+    const response = await fetch(`/api/generate?t=${cacheBuster}`, {
       method: "POST",
       body: JSON.stringify({ tag: requestTag, useRandomOrder }),
       headers: { "Content-Type": "application/json" },
@@ -544,13 +548,8 @@ export default function Home() {
     const sessionId = sessionRef.current + 1;
     sessionRef.current = sessionId;
     const isQuickTag = Boolean(tagOverride);
-    const processed = isQuickTag ? null : processTextInput(userActivity);
-    const initialTag = isQuickTag
-      ? (tagOverride ?? "lofi").toLowerCase().trim()
-      : (processed?.tag ?? "lofi");
-    const useRandomOrder = isQuickTag ? true : (processed?.useRandomOrder ?? false);
-    setStationTag(initialTag.toUpperCase());
-    setActiveTag(initialTag);
+    
+    // Initialize UI
     setScreen("loading");
     setIsConnecting(true);
     setConnectionProgress(0);
@@ -559,22 +558,63 @@ export default function Home() {
     setTrackTitle(null);
     setPlaybackState("idle");
     setStatusText(t("statusTuning"));
-    if (isQuickTag) {
-      setStatusDetail(format("statusSearchingFor", { tag: initialTag }));
-    } else if (processed) {
-      setStatusDetail(
-        format("vibeDetail", {
-          category: processed.category,
-          genre: processed.genre,
-        })
-      );
-    } else {
-      setStatusDetail(
-        format("vibeDetail", { category: "DIRECT", genre: "lofi" })
-      );
-    }
+    setAiReasoning("");
     failedCountRef.current = 0;
     activeStationUrlRef.current = null;
+
+    const processed = isQuickTag ? null : processTextInput(userActivity);
+    let initialTag = isQuickTag
+      ? (tagOverride ?? "lofi").toLowerCase().trim()
+      : (processed?.tag ?? "lofi");
+    let useRandomOrder = isQuickTag ? true : (processed?.useRandomOrder ?? false);
+    let selectedGenre = isQuickTag ? initialTag : (processed?.genre ?? initialTag);
+
+    const isFallback =
+      !isQuickTag &&
+      (processed?.category === "FALLBACK" || selectedGenre === "lofi");
+
+    if (isFallback && userActivity.trim().length > 3) {
+      setStatusDetail(t("aiAnalyzing"));
+      console.log("DEBUG: Calling AI with text:", userActivity);
+      try {
+        const response = await fetch("/api/dj", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            text: userActivity,
+            lang: lang === "RU" ? "ru" : "en",
+          }),
+        });
+        if (response.ok) {
+          const data = await response.json();
+          if (data?.genre && data.genre !== "random") {
+            selectedGenre = String(data.genre).toLowerCase().trim();
+            initialTag = selectedGenre;
+            useRandomOrder = true;
+          }
+          if (data?.reasoning) {
+            setAiReasoning(String(data.reasoning));
+          }
+        }
+      } catch (error) {
+        console.error("AI request failed, staying with lofi:", error);
+      } finally {
+        // no-op
+      }
+    }
+
+    setStationTag(selectedGenre.toUpperCase());
+    setActiveTag(initialTag);
+
+    if (isQuickTag) {
+      setStatusDetail(format("statusSearchingFor", { tag: initialTag }));
+    } else {
+      setStatusDetail(
+        format("vibeDetail", {
+          genre: selectedGenre.toUpperCase(),
+        })
+      );
+    }
 
     try {
       let resolvedTag = initialTag;
@@ -588,7 +628,7 @@ export default function Home() {
         if (!isQuickTag) {
           resolvedTag = result.tag;
         }
-        setStationTag(resolvedTag.toUpperCase());
+        setStationTag(selectedGenre.toUpperCase());
         setActiveTag(resolvedTag);
 
         if (!stationList.length) {
@@ -706,6 +746,7 @@ export default function Home() {
     setTrackTitle(null);
     setPlaybackState("idle");
     setStatusText(undefined);
+    setAiReasoning("");
     setStatusDetail(undefined);
     setConnectionProgress(0);
     setIsConnecting(false);
@@ -856,6 +897,7 @@ export default function Home() {
       <LoadingScreen
         progress={connectionProgress}
         title={format("scanningAirwaves", { tag: stationTag })}
+        statusLine={statusDetail}
         cancelLabel={t("cancel")}
         lang={lang}
         onSetLang={setLangValue}
@@ -878,6 +920,7 @@ export default function Home() {
           playbackState === "blocked" ? t("statusAudioBlocked") : statusText
         }
         statusDetail={statusDetail}
+        aiReasoning={aiReasoning}
         labels={{
           nowPlaying: t("nowPlaying"),
           genre: t("genre"),

@@ -35,11 +35,6 @@ const withRetry = async <T>(operation: () => Promise<T>): Promise<T> => {
 const isHttpsUrl = (value?: string) =>
   typeof value === "string" && value.trim().toLowerCase().startsWith("https://");
 
-const isPlaylistUrl = (url: string): boolean => {
-  const lower = url.toLowerCase();
-  return lower.endsWith(".m3u") || lower.endsWith(".m3u8") || lower.endsWith(".pls") || lower.includes(".m3u?") || lower.includes(".pls?");
-};
-
 const getStreamFormat = (url: string): "mp3" | "aac" | "ogg" | "other" => {
   const lower = url.toLowerCase();
   if (lower.includes("mp3") || lower.endsWith(".mp3")) return "mp3";
@@ -53,9 +48,10 @@ const normalizeStations = (stations: Station[]) => {
     const url = station.urlResolved || station.url;
     if (!url) return false;
     if (!isHttpsUrl(url)) return false;
-    if (isPlaylistUrl(url)) return false;
     return true;
   });
+
+  console.log("Found stations after HTTPS filter:", filtered.length);
 
   const withFormat = filtered.map((station) => ({
     station,
@@ -93,14 +89,27 @@ export async function POST(request: NextRequest) {
   try {
     await ensureBaseUrl();
 
+    // Простой поиск по тегу
     const rawTag = typeof body.tag === "string" ? body.tag.trim() : "";
-    const tag = rawTag.length ? rawTag.toLowerCase() : "lofi";
+    const displayTag = rawTag.length ? rawTag.toLowerCase() : "lofi";
     const useRandomOrder = body.useRandomOrder === true;
-    console.info("Radio stations requested for tag:", tag, "| randomOrder:", useRandomOrder);
-
-    await ensureBaseUrl();
-    const stations = await fetchSecureStationsForTag(tag, useRandomOrder);
-    return NextResponse.json({ tag, stations });
+    console.info(
+      "Radio stations requested for tag:",
+      displayTag,
+      "| randomOrder:",
+      useRandomOrder
+    );
+    const stations = await fetchSecureStationsForTag(displayTag, useRandomOrder);
+    
+    // Запрещаем кеширование
+    return NextResponse.json(
+      { tag: displayTag, stations },
+      {
+        headers: {
+          'Cache-Control': 'no-store',
+        },
+      }
+    );
   } catch (error) {
     console.error("RADIO API ERROR:", error);
     if (error instanceof NoStationsError) {
@@ -116,13 +125,86 @@ export async function POST(request: NextRequest) {
   }
 }
 
+const normalizeTagForSearch = (tag: string): string => {
+  const tagMap: Record<string, string> = {
+    "dnb": "drum and bass",
+    "lo-fi": "lofi",
+    "lofi": "lofi",
+    "hip-hop": "hip hop",
+    "hiphop": "hip hop",
+    "k-pop": "k-pop",
+    "kpop": "k-pop",
+    "j-pop": "j-pop",
+    "jpop": "j-pop",
+    "retro game": "chiptune",
+  };
+  return tagMap[tag.toLowerCase()] || tag;
+};
+
+const getFallbackTag = (tag: string): string | null => {
+  const fallbackMap: Record<string, string> = {
+    "slowcore": "ambient",
+    "sad lofi": "lofi",
+    "sad piano": "piano",
+    "indie folk": "indie",
+    "lofi coding": "lofi",
+    "gym phonk": "phonk",
+    "liquid dnb": "drum and bass",
+    "retro game": "chiptune",
+    "video game music": "chiptune",
+    "night drive": "synthwave",
+    "road trip": "synthwave",
+    "nature sounds": "ambient",
+    "soft piano": "piano",
+    "chill r&b": "rnb",
+    "sexual vibe": "rnb",
+    "lofi sex": "lofi",
+    "phonk drift": "phonk",
+    "doom metal": "metal",
+    "metalcore": "metal",
+    "post-rock": "rock",
+    "indie pop": "indie",
+    "retro pop": "pop",
+    "classic rock": "rock",
+    "rnb party": "rnb",
+    "brain food": "ambient",
+    "dub techno": "techno",
+  };
+  return fallbackMap[tag.toLowerCase()] || null;
+};
+
 const fetchSecureStationsForTag = async (tag: string, useRandomOrder = false) => {
-  const MAX_ATTEMPTS = 3;
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
-    const stations = await withRetry(() => {
+  // Normalize tag for search (e.g., "dnb" -> "drum and bass")
+  const normalizedTag = normalizeTagForSearch(tag);
+  
+  const stations = await withRetry(() => {
+    const query = {
+      tag: normalizedTag,
+      limit: 30,
+      order: (useRandomOrder ? "random" : "clickCount") as any,
+      reverse: !useRandomOrder,
+      hideBroken: false,
+      lastcheckok: 1,
+    };
+    return radioBrowser.searchStations(query as any);
+  });
+  
+  const secure = normalizeStations(stations as Station[]);
+  
+  if (secure.length) {
+    console.info(`Found ${secure.length} HTTPS stations for tag ${normalizedTag} (original: ${tag})`);
+    return secure;
+  }
+
+  // Try fallback tag (use original tag for fallback lookup)
+  const fallbackTag = getFallbackTag(tag);
+  if (fallbackTag) {
+    const normalizedFallback = normalizeTagForSearch(fallbackTag);
+    console.info(`Trying fallback tag "${normalizedFallback}" for "${tag}"`);
+    const fallbackStations = await withRetry(() => {
       const query = {
-        tag,
-        limit: 20,
+        tag: normalizedFallback,
+        limit: 30,
         order: (useRandomOrder ? "random" : "clickCount") as any,
         reverse: !useRandomOrder,
         hideBroken: false,
@@ -130,32 +212,11 @@ const fetchSecureStationsForTag = async (tag: string, useRandomOrder = false) =>
       };
       return radioBrowser.searchStations(query as any);
     });
-    const secure = normalizeStations(stations);
-    if (secure.length) {
-      console.info(
-        `Found ${secure.length} HTTPS stations for tag ${tag} (attempt ${attempt})`
-      );
-      return secure;
+    const secureFallback = normalizeStations(fallbackStations as Station[]);
+    if (secureFallback.length) {
+      console.info(`Found ${secureFallback.length} HTTPS stations for fallback tag ${normalizedFallback}`);
+      return secureFallback;
     }
-    console.warn(`No HTTPS streams found for tag ${tag} (attempt ${attempt})`);
-  }
-
-  const fallbackStations = await withRetry(() => {
-    const query = {
-      limit: 20,
-      order: "votes" as const,
-      reverse: true,
-      hideBroken: false,
-      lastcheckok: 1,
-    };
-    return radioBrowser.searchStations(query as any);
-  });
-  const secureFallback = normalizeStations(fallbackStations);
-  if (secureFallback.length) {
-    console.info(
-      `Fallback returned ${secureFallback.length} HTTPS stations for tag ${tag}`
-    );
-    return secureFallback;
   }
 
   throw new NoStationsError(`No HTTPS stations available for tag "${tag}"`);
