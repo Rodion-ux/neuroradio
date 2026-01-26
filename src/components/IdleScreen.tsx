@@ -161,15 +161,8 @@ export function IdleScreen({
 
           <form
             onSubmit={handleSubmit}
-            className="mt-2 flex w-full max-w-xl flex-col items-center gap-4 sm:mt-4 sm:gap-6"
+            className="mt-8 flex w-full max-w-xl flex-col items-center gap-4 sm:mt-10 sm:gap-6"
           >
-            <label
-              htmlFor="activity"
-              className="text-[9px] uppercase tracking-[0.3em] text-neon/80 sm:text-xs sm:tracking-[0.35em]"
-            >
-              {labels.inputLabel}
-            </label>
-
             <input
               id="activity"
               type="text"
@@ -276,7 +269,7 @@ export function IdleScreen({
           <div className="pointer-events-none absolute top-24 left-16 pixel-sparkle will-change-transform" />
 
           <div className="pointer-events-none absolute bottom-4 right-6 text-[8px] text-neon/60 sm:text-[10px]">
-            v0.1 BETA
+            v2.0 BETA
           </div>
         </div>
       </div>

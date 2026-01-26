@@ -101,7 +101,7 @@ export function LoadingScreen({
           <div className="pointer-events-none absolute top-24 left-16 pixel-sparkle will-change-transform" />
 
           <div className="pointer-events-none absolute bottom-4 right-6 text-[8px] text-neon/60 sm:text-[10px]">
-            v0.1 BETA
+            v2.0 BETA
           </div>
         </div>
       </div>

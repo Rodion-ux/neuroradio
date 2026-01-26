@@ -89,12 +89,12 @@ const resolveAccentColor = (tag: string) => {
 
 const translations = {
   placeholder: {
-    RU: "ЧТО ТЫ СЕЙЧАС ДЕЛАЕШЬ?",
-    EN: "WHAT ARE YOU DOING?",
+    RU: "Опиши занятие или настроение...",
+    EN: "Describe your activity or mood...",
   },
   inputLabel: {
-    RU: "ЧТО ТЫ СЕЙЧАС ДЕЛАЕШЬ?",
-    EN: "WHAT ARE YOU DOING?",
+    RU: "Опиши занятие или настроение...",
+    EN: "Describe your activity or mood...",
   },
   statusIdle: {
     RU: "ОЖИДАНИЕ",
@@ -111,6 +111,10 @@ const translations = {
   statusSignalLost: {
     RU: "СИГНАЛ ПОТЕРЯН — ПОВТОР...",
     EN: "SIGNAL LOST - RETRYING...",
+  },
+  statusStationUnstable: {
+    RU: "СТАНЦИЯ НЕСТАБИЛЬНА — ПЕРЕКЛЮЧЕНИЕ...",
+    EN: "STATION UNSTABLE — SKIPPING...",
   },
   statusNoStations: {
     RU: "НЕТ ДОСТУПНЫХ СТАНЦИЙ",
@@ -145,24 +149,24 @@ const translations = {
     EN: "UNKNOWN STATION",
   },
   tagLine: {
-    RU: "AI ГЕНЕРИРУЕТ ВАЙБЫ",
-    EN: "AI GENERATED VIBES",
+    RU: "АДАПТИВНОЕ НЕЙРО-РАДИО",
+    EN: "ADAPTIVE NEURO RADIO",
   },
   title: {
     RU: "NEURO RADIO",
     EN: "NEURO RADIO",
   },
   subtitle: {
-    RU: "ТАКОЙ ВАЙБ",
-    EN: "IT GOES LIKE",
+    RU: "Саундтрек твоего момента",
+    EN: "Soundtrack for your reality",
   },
   startButton: {
-    RU: "ЗАПУСТИТЬ СТАНЦИЮ",
-    EN: "START STATION",
+    RU: "ПОЙМАТЬ ВОЛНУ",
+    EN: "TUNE IN",
   },
   quickVibes: {
-    RU: "БЫСТРЫЕ ВАЙБЫ:",
-    EN: "QUICK VIBES:",
+    RU: "БЫСТРЫЙ ВЫБОР:",
+    EN: "INSTANT MOODS:",
   },
   nowPlaying: {
     RU: "СЕЙЧАС ИГРАЕТ:",
@@ -193,8 +197,8 @@ const translations = {
     EN: "[ COPIED! ]",
   },
   favoritesTitle: {
-    RU: "МОИ СТАНЦИИ:",
-    EN: "MY STATIONS:",
+    RU: "МОЯ КОЛЛЕКЦИЯ:",
+    EN: "MY COLLECTION:",
   },
   addFavorite: {
     RU: "В ИЗБРАННОЕ",
@@ -244,6 +248,7 @@ export default function Home() {
   const audioLevelRef = useRef(0.25);
   const volumeFadeRef = useRef<number | null>(null);
   const lastAudibleVolumeRef = useRef(0.7);
+  const streamTimeoutRef = useRef<number | null>(null);
 
   const isMuted = volume === 0;
 
@@ -344,9 +349,20 @@ export default function Home() {
     if (!list.length) return;
     isSwitchingRef.current = true;
     failedCountRef.current += 1;
-    setStatusText(t("statusSignalLost"));
-    if (reason) {
-      setStatusDetail(reason);
+    
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.src = "";
+    }
+    
+    if (reason === "stream timeout") {
+      setStatusText(t("statusStationUnstable"));
+      setStatusDetail("Timeout: Station not responding");
+    } else {
+      setStatusText(t("statusSignalLost"));
+      if (reason) {
+        setStatusDetail(reason);
+      }
     }
 
     if (failedCountRef.current >= list.length) {
@@ -427,6 +443,11 @@ export default function Home() {
     const list = stationsRef.current;
     if (!list.length) return;
 
+    if (streamTimeoutRef.current) {
+      window.clearTimeout(streamTimeoutRef.current);
+      streamTimeoutRef.current = null;
+    }
+
     const safeIndex = (index + list.length) % list.length;
     const station = list[safeIndex];
     stationIndexRef.current = safeIndex;
@@ -444,29 +465,53 @@ export default function Home() {
     audio.volume = 0;
     audio.preload = "none";
     audio.crossOrigin = "anonymous";
+    
     let hasPlaybackSignal = false;
+    let timeoutCleared = false;
+    
     const timeoutId = window.setTimeout(() => {
-      if (!hasPlaybackSignal) {
+      if (!hasPlaybackSignal && !timeoutCleared) {
+        setStatusText(t("statusStationUnstable"));
+        setStatusDetail("Timeout: Station not responding");
+        streamTimeoutRef.current = null;
         void handleStreamError("stream timeout");
       }
     }, 5000);
+    
+    streamTimeoutRef.current = timeoutId;
+    
     const clearTimeouts = () => {
       hasPlaybackSignal = true;
-      window.clearTimeout(timeoutId);
+      if (!timeoutCleared) {
+        timeoutCleared = true;
+        window.clearTimeout(timeoutId);
+        streamTimeoutRef.current = null;
+      }
     };
+    
     audio.addEventListener("playing", clearTimeouts, { once: true });
     audio.addEventListener("canplay", clearTimeouts, { once: true });
+    audio.addEventListener("loadstart", () => {
+      setStatusText(t("statusTuning"));
+    }, { once: true });
 
     console.log("Попытка воспроизведения URL:", station.urlResolved);
 
     try {
       await audio.play();
       failedCountRef.current = 0;
-      setStatusText(undefined);
+      if (hasPlaybackSignal) {
+        setStatusText(undefined);
+      }
       if (volume > 0) {
         fadeToVolume(volume);
       }
     } catch {
+      if (!timeoutCleared) {
+        timeoutCleared = true;
+        window.clearTimeout(timeoutId);
+        streamTimeoutRef.current = null;
+      }
       if (audio.error) {
         void handleStreamError("playback error");
       } else {
@@ -646,6 +691,10 @@ export default function Home() {
     if (volumeFadeRef.current) {
       cancelAnimationFrame(volumeFadeRef.current);
       volumeFadeRef.current = null;
+    }
+    if (streamTimeoutRef.current) {
+      window.clearTimeout(streamTimeoutRef.current);
+      streamTimeoutRef.current = null;
     }
     if (audioRef.current) {
       audioRef.current.pause();

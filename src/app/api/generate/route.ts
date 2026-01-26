@@ -6,10 +6,12 @@ export const runtime = "nodejs";
 type Station = {
   id: string;
   name: string;
+  url?: string;
   urlResolved: string;
   tags: string[];
   favicon?: string;
   country?: string;
+  codec?: string;
 };
 
 const radioBrowser = new RadioBrowserApi("Neuro Radio", true);
@@ -33,17 +35,49 @@ const withRetry = async <T>(operation: () => Promise<T>): Promise<T> => {
 const isHttpsUrl = (value?: string) =>
   typeof value === "string" && value.trim().toLowerCase().startsWith("https://");
 
-const normalizeStations = (stations: Station[]) =>
-  stations
-    .filter((station) => isHttpsUrl(station.urlResolved))
-    .map((station) => ({
-      id: station.id,
-      name: station.name,
-      urlResolved: station.urlResolved,
-      tags: station.tags,
-      favicon: station.favicon,
-      country: station.country,
-    }));
+const isPlaylistUrl = (url: string): boolean => {
+  const lower = url.toLowerCase();
+  return lower.endsWith(".m3u") || lower.endsWith(".m3u8") || lower.endsWith(".pls") || lower.includes(".m3u?") || lower.includes(".pls?");
+};
+
+const getStreamFormat = (url: string): "mp3" | "aac" | "ogg" | "other" => {
+  const lower = url.toLowerCase();
+  if (lower.includes("mp3") || lower.endsWith(".mp3")) return "mp3";
+  if (lower.includes("aac") || lower.endsWith(".aac")) return "aac";
+  if (lower.includes("ogg") || lower.endsWith(".ogg")) return "ogg";
+  return "other";
+};
+
+const normalizeStations = (stations: Station[]) => {
+  const filtered = stations.filter((station) => {
+    const url = station.urlResolved || station.url;
+    if (!url) return false;
+    if (!isHttpsUrl(url)) return false;
+    if (isPlaylistUrl(url)) return false;
+    return true;
+  });
+
+  const withFormat = filtered.map((station) => ({
+    station,
+    format: getStreamFormat(station.urlResolved || station.url || ""),
+    isMp3: getStreamFormat(station.urlResolved || station.url || "") === "mp3",
+  }));
+
+  const sorted = withFormat.sort((a, b) => {
+    if (a.isMp3 && !b.isMp3) return -1;
+    if (!a.isMp3 && b.isMp3) return 1;
+    return 0;
+  });
+
+  return sorted.map(({ station }) => ({
+    id: station.id,
+    name: station.name,
+    urlResolved: station.urlResolved || station.url || "",
+    tags: station.tags,
+    favicon: station.favicon,
+    country: station.country,
+  }));
+};
 
 class NoStationsError extends Error {}
 
@@ -106,9 +140,16 @@ const fetchSecureStationsForTag = async (tag: string, useRandomOrder = false) =>
     console.warn(`No HTTPS streams found for tag ${tag} (attempt ${attempt})`);
   }
 
-  const fallbackStations = await withRetry(() =>
-    radioBrowser.getStationsByVotes(20)
-  );
+  const fallbackStations = await withRetry(() => {
+    const query = {
+      limit: 20,
+      order: "votes" as const,
+      reverse: true,
+      hideBroken: false,
+      lastcheckok: 1,
+    };
+    return radioBrowser.searchStations(query as any);
+  });
   const secureFallback = normalizeStations(fallbackStations);
   if (secureFallback.length) {
     console.info(
