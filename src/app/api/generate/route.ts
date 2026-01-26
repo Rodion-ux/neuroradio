@@ -123,7 +123,7 @@ const fetchSecureStationsForTag = async (tag: string, useRandomOrder = false) =>
       const query = {
         tag,
         limit: 20,
-        order: (useRandomOrder ? "random" : "clickCount") as const,
+        order: (useRandomOrder ? "random" : "clickCount") as any,
         reverse: !useRandomOrder,
         hideBroken: false,
         lastcheckok: 1,
