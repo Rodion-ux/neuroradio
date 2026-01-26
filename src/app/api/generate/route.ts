@@ -1,4 +1,4 @@
-import { RadioBrowserApi, StationSearchType } from "radio-browser-api";
+import { RadioBrowserApi } from "radio-browser-api";
 import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
@@ -84,20 +84,17 @@ export async function POST(request: NextRequest) {
 const fetchSecureStationsForTag = async (tag: string) => {
   const MAX_ATTEMPTS = 3;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
-    const stations = await withRetry(() =>
-      radioBrowser.getStationsBy(
-        StationSearchType.byTag,
+    const stations = await withRetry(() => {
+      const query = {
         tag,
-        {
-          limit: 20,
-          order: "votes",
-          reverse: true,
-          hideBroken: false,
-        },
-        undefined,
-        true
-      )
-    );
+        limit: 20,
+        order: "clickcount",
+        reverse: true,
+        hideBroken: false,
+        lastcheckok: 1,
+      };
+      return radioBrowser.searchStations(query as typeof query & { lastcheckok: number });
+    });
     const secure = normalizeStations(stations);
     if (secure.length) {
       console.info(

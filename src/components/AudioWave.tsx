@@ -1,88 +1,49 @@
 "use client";
 
-import { memo, useEffect, useMemo, useRef } from "react";
+import { memo, useEffect, useRef } from "react";
 
 type AudioWaveProps = {
   isPlaying: boolean;
   className?: string;
   canvasClassName?: string;
   lineWidth?: number;
-  colors?: Array<[number, number, number]>;
   levelRef?: React.MutableRefObject<number>;
 };
 
-const DEFAULT_COLORS: Array<[number, number, number]> = [];
-
-const hslToRgb = (hue: number, saturation: number, lightness: number) => {
-  const s = saturation / 100;
-  const l = lightness / 100;
-  const c = (1 - Math.abs(2 * l - 1)) * s;
-  const x = c * (1 - Math.abs(((hue / 60) % 2) - 1));
-  const m = l - c / 2;
-  let r = 0;
-  let g = 0;
-  let b = 0;
-
-  if (hue >= 0 && hue < 60) {
-    r = c;
-    g = x;
-  } else if (hue < 120) {
-    r = x;
-    g = c;
-  } else if (hue < 180) {
-    g = c;
-    b = x;
-  } else if (hue < 240) {
-    g = x;
-    b = c;
-  } else if (hue < 300) {
-    r = x;
-    b = c;
-  } else {
-    r = c;
-    b = x;
-  }
-
-  return [
-    Math.round((r + m) * 255),
-    Math.round((g + m) * 255),
-    Math.round((b + m) * 255),
-  ] as [number, number, number];
+type WaveConfig = {
+  color: string;
+  speed: number;
+  amplitude: number;
+  phaseOffset: number;
+  yOffset: number;
 };
-
-const randomNeonColor = (): [number, number, number] => {
-  const hue = Math.random() * 360;
-  const saturation = 75 + Math.random() * 25;
-  const lightness = 45 + Math.random() * 20;
-  return hslToRgb(hue, saturation, lightness);
-};
-
-const createWaves = (count: number, colors: Array<[number, number, number]>) =>
-  Array.from({ length: count }, (_, index) => ({
-    amplitude: 0.18 + Math.random() * 0.38,
-    frequency: 1.2 + Math.random() * 2.4,
-    speed: 0.6 + Math.random() * 1.4,
-    phase: Math.random() * Math.PI * 2,
-    color: colors.length ? colors[index % colors.length] : randomNeonColor(),
-    opacity: 0.12 + Math.random() * 0.3,
-  }));
 
 export const AudioWave = memo(function AudioWave({
   isPlaying,
   className,
   canvasClassName,
   lineWidth = 2,
-  colors = DEFAULT_COLORS,
   levelRef,
 }: AudioWaveProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const isPlayingRef = useRef(isPlaying);
-  const waveCountRef = useRef(4 + Math.floor(Math.random() * 3));
-  const waves = useMemo(() => createWaves(waveCountRef.current, colors), [colors]);
+  const waveConfigsRef = useRef<WaveConfig[]>([]);
 
   useEffect(() => {
     isPlayingRef.current = isPlaying;
   }, [isPlaying]);
+
+  useEffect(() => {
+    if (waveConfigsRef.current.length) return;
+    const colors = ["#ff77a8", "#6bf3ff", "#ffb35c", "#a57cff"];
+    waveConfigsRef.current = colors.map((color) => ({
+      color,
+      speed: 0.6 + Math.random() * 1.4,
+      amplitude: 0.2 + Math.random() * 0.45,
+      phaseOffset: Math.random() * Math.PI * 2,
+      yOffset: (Math.random() - 0.5) * 0.18,
+    }));
+  }, []);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -125,8 +86,8 @@ export const AudioWave = memo(function AudioWave({
       const centerY = height / 2;
       const t = time * 0.001;
 
-      waves.forEach((wave) => {
-        const [r, g, b] = wave.color;
+      const configs = waveConfigsRef.current;
+      configs.forEach((wave) => {
         const amplitude = wave.amplitude * amplitudeScale * height * 0.5;
         const step = Math.max(4, Math.floor(width / 80));
         context.beginPath();
@@ -134,8 +95,8 @@ export const AudioWave = memo(function AudioWave({
         for (let x = 0; x <= width; x += step) {
           const progress = x / Math.max(width, 1);
           const angle =
-            progress * Math.PI * 2 * wave.frequency + wave.phase + t * wave.speed;
-          const y = centerY + Math.sin(angle) * amplitude;
+            progress * Math.PI * 2 * 1.6 + wave.phaseOffset + t * wave.speed;
+          const y = centerY + wave.yOffset * height + Math.sin(angle) * amplitude;
           if (x === 0) {
             context.moveTo(x, y);
           } else {
@@ -144,9 +105,9 @@ export const AudioWave = memo(function AudioWave({
           }
           prevY = y;
         }
-        context.strokeStyle = `rgba(${r}, ${g}, ${b}, ${wave.opacity + 0.2})`;
+        context.strokeStyle = wave.color;
         context.shadowBlur = 12;
-        context.shadowColor = `rgba(${r}, ${g}, ${b}, ${wave.opacity})`;
+        context.shadowColor = wave.color;
         context.lineWidth = lineWidth;
         context.stroke();
       });
@@ -160,7 +121,7 @@ export const AudioWave = memo(function AudioWave({
       cancelAnimationFrame(frameId);
       resizeObserver.disconnect();
     };
-  }, [waves, lineWidth, levelRef]);
+  }, [lineWidth, levelRef]);
 
   return (
     <div className={className}>

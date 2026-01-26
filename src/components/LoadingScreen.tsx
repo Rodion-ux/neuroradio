@@ -25,14 +25,14 @@ export function LoadingScreen({
   const activeBlocks = Math.round((progress / 100) * totalBlocks);
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-4 py-10">
+    <div className="flex h-[100dvh] overflow-hidden items-center justify-center bg-background px-4 py-4 sm:min-h-screen sm:py-10">
       <div className="crt-shell w-full max-w-4xl rounded-3xl">
-        <div className="crt-screen crt-text crt-life relative flex flex-col items-center gap-10 rounded-3xl px-6 py-10 text-center text-neon sm:px-12">
+        <div className="crt-screen crt-text crt-life relative flex h-full flex-col items-center justify-between gap-6 rounded-3xl px-5 py-6 text-center text-neon sm:gap-10 sm:px-12 sm:py-10">
           <BackgroundFx />
           <div className="absolute left-6 top-6 h-3 w-16 bg-neon/40 shadow-[0_0_12px_rgba(255,119,168,0.7)]" />
           <div className="absolute right-6 top-6 h-3 w-10 bg-neon/40 shadow-[0_0_12px_rgba(255,119,168,0.7)]" />
 
-          <div className="z-10 mb-2 flex w-full justify-end sm:absolute sm:right-4 sm:top-4 sm:mb-0 sm:w-auto">
+          <div className="z-10 mb-1 flex w-full justify-end sm:absolute sm:right-4 sm:top-4 sm:mb-0 sm:w-auto">
             <div className="flex overflow-hidden rounded-2xl border-2 border-neon bg-[#2a182a]/80 text-[7px] uppercase tracking-[0.3em] text-neon backdrop-blur-md sm:text-[8px]">
               <button
                 type="button"
@@ -55,8 +55,8 @@ export function LoadingScreen({
             </div>
           </div>
 
-          <div className="mt-6 flex w-full max-w-md flex-col items-center gap-6">
-            <p className="text-[10px] uppercase tracking-[0.35em] text-neon-bright sm:text-xs">
+          <div className="mt-2 flex w-full max-w-md flex-col items-center gap-4 sm:mt-6 sm:gap-6">
+            <p className="text-[9px] uppercase tracking-[0.3em] text-neon-bright sm:text-xs sm:tracking-[0.35em]">
               {title}
               <span className="blink-cursor">_</span>
             </p>
@@ -75,12 +75,12 @@ export function LoadingScreen({
             </div>
 
             {statusLine && (
-              <p className="text-[8px] uppercase tracking-[0.25em] text-neon/70 sm:text-[10px]">
+              <p className="text-[7px] uppercase tracking-[0.25em] text-neon/70 sm:text-[10px]">
                 {statusLine}
               </p>
             )}
 
-            <p className="text-[8px] uppercase tracking-[0.25em] text-neon/70 sm:text-[10px]">
+            <p className="text-[7px] uppercase tracking-[0.25em] text-neon/70 sm:text-[10px]">
               {progress.toString().padStart(3, "0")}%
             </p>
 

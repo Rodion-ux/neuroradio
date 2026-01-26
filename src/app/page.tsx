@@ -19,6 +19,53 @@ type Station = {
   country?: string;
 };
 
+type FavoriteStation = {
+  changeuuid: string;
+  name: string;
+  url_resolved: string;
+  tags: string[];
+  favicon?: string;
+};
+
+const FAVORITES_KEY = "neuroradio_favorites";
+
+const readFavorites = (): FavoriteStation[] => {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(FAVORITES_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((item) => {
+      if (!item || typeof item !== "object") return false;
+      return (
+        typeof item.changeuuid === "string" &&
+        typeof item.name === "string" &&
+        typeof item.url_resolved === "string"
+      );
+    });
+  } catch {
+    return [];
+  }
+};
+
+const writeFavorites = (favorites: FavoriteStation[]) => {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(FAVORITES_KEY, JSON.stringify(favorites));
+  } catch {
+    // Ignore storage failures.
+  }
+};
+
+const favoriteToStation = (favorite: FavoriteStation): Station => ({
+  id: favorite.changeuuid,
+  name: favorite.name,
+  urlResolved: favorite.url_resolved,
+  tags: Array.isArray(favorite.tags) ? favorite.tags : [],
+  favicon: favorite.favicon,
+});
+
 const resolveAccentColor = (tag: string) => {
   const value = tag.toLowerCase();
   if (value.includes("synth") || value.includes("retro") || value.includes("wave")) {
@@ -144,6 +191,22 @@ const translations = {
     RU: "[ СКОПИРОВАНО! ]",
     EN: "[ COPIED! ]",
   },
+  favoritesTitle: {
+    RU: "МОИ СТАНЦИИ:",
+    EN: "MY STATIONS:",
+  },
+  addFavorite: {
+    RU: "В ИЗБРАННОЕ",
+    EN: "ADD TO FAVORITES",
+  },
+  removeFavorite: {
+    RU: "УБРАТЬ ИЗ ИЗБРАННОГО",
+    EN: "REMOVE FROM FAVORITES",
+  },
+  favoriteAdded: {
+    RU: "ДОБАВЛЕНО В ИЗБРАННОЕ",
+    EN: "ADDED TO FAVORITES",
+  },
 } as const;
 
 type TranslationKey = keyof typeof translations;
@@ -162,6 +225,7 @@ export default function Home() {
   const [playbackState, setPlaybackState] = useState<PlaybackState>("idle");
   const [statusText, setStatusText] = useState<string | undefined>(undefined);
   const [statusDetail, setStatusDetail] = useState<string | undefined>(undefined);
+  const [favorites, setFavorites] = useState<FavoriteStation[]>([]);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audioReadyRef = useRef(false);
   const sessionRef = useRef(0);
@@ -195,6 +259,10 @@ export default function Home() {
   useEffect(() => {
     activeTagRef.current = activeTag;
   }, [activeTag]);
+
+  useEffect(() => {
+    setFavorites(readFavorites());
+  }, []);
 
   useEffect(() => {
     if (!isConnecting) return;
@@ -274,7 +342,7 @@ export default function Home() {
 
     const handlePlay = () => {
       setPlaybackState("playing");
-      setStatusText(t("statusPlaying"));
+      setStatusText(undefined);
       setStatusDetail(undefined);
       if (audioContextRef.current?.state === "suspended") {
         void audioContextRef.current.resume();
@@ -317,12 +385,16 @@ export default function Home() {
     audio.volume = 0.75;
     audio.preload = "none";
     audio.crossOrigin = "anonymous";
+    let hasPlaybackSignal = false;
     const timeoutId = window.setTimeout(() => {
-      if (audio.readyState < 2) {
+      if (!hasPlaybackSignal) {
         void handleStreamError("stream timeout");
       }
     }, 5000);
-    const clearTimeouts = () => window.clearTimeout(timeoutId);
+    const clearTimeouts = () => {
+      hasPlaybackSignal = true;
+      window.clearTimeout(timeoutId);
+    };
     audio.addEventListener("playing", clearTimeouts, { once: true });
     audio.addEventListener("canplay", clearTimeouts, { once: true });
 
@@ -331,7 +403,7 @@ export default function Home() {
     try {
       await audio.play();
       failedCountRef.current = 0;
-      setStatusText(t("statusPlaying"));
+      setStatusText(undefined);
     } catch {
       if (audio.error) {
         void handleStreamError("playback error");
@@ -444,6 +516,65 @@ export default function Home() {
         setConnectionProgress(100);
       }
     }
+  };
+
+  const handlePlayFavorite = async (favorite: FavoriteStation) => {
+    const sessionId = sessionRef.current + 1;
+    sessionRef.current = sessionId;
+    const station = favoriteToStation(favorite);
+    const tagLabel = station.tags[0] ?? "favorite";
+
+    setStationTag(tagLabel.toUpperCase());
+    setActiveTag(tagLabel.toLowerCase());
+    setScreen("loading");
+    setIsConnecting(true);
+    setConnectionProgress(0);
+    setStations([station]);
+    stationsRef.current = [station];
+    setStationIndex(0);
+    setStationName("");
+    setTrackTitle(null);
+    setPlaybackState("idle");
+    setStatusText(t("statusTuning"));
+    setStatusDetail(format("statusSearchingFor", { tag: tagLabel }));
+    failedCountRef.current = 0;
+    activeStationUrlRef.current = null;
+
+    try {
+      await startStationPlayback(0);
+      if (sessionId === sessionRef.current) {
+        setScreen("playing");
+      }
+    } finally {
+      if (sessionId === sessionRef.current) {
+        setIsConnecting(false);
+        setConnectionProgress(100);
+      }
+    }
+  };
+
+  const currentStation = stations[stationIndex] ?? stationsRef.current[stationIndexRef.current];
+  const isFavorite = currentStation
+    ? favorites.some((item) => item.changeuuid === currentStation.id)
+    : false;
+
+  const handleToggleFavorite = () => {
+    if (!currentStation) return;
+    const entry: FavoriteStation = {
+      changeuuid: currentStation.id,
+      name: currentStation.name,
+      url_resolved: currentStation.urlResolved,
+      tags: currentStation.tags ?? [],
+      favicon: currentStation.favicon,
+    };
+    setFavorites((prev) => {
+      const exists = prev.some((item) => item.changeuuid === entry.changeuuid);
+      const next = exists
+        ? prev.filter((item) => item.changeuuid !== entry.changeuuid)
+        : [entry, ...prev];
+      writeFavorites(next);
+      return next;
+    });
   };
 
   const handleStop = () => {
@@ -613,11 +744,16 @@ export default function Home() {
           stop: t("stopButton"),
           trackFallback: t("trackFallback"),
           copied: t("copied"),
+          addFavorite: t("addFavorite"),
+          removeFavorite: t("removeFavorite"),
+          favoriteAdded: t("favoriteAdded"),
         }}
         lang={lang}
         onSetLang={setLangValue}
         audioLevelRef={audioLevelRef}
         accentColor={resolveAccentColor(activeTag)}
+        isFavorite={isFavorite}
+        onToggleFavorite={handleToggleFavorite}
       />
     );
   }
@@ -635,9 +771,12 @@ export default function Home() {
         placeholder: t("placeholder"),
         startButton: t("startButton"),
         quickVibes: t("quickVibes"),
+        favoritesTitle: t("favoritesTitle"),
       }}
       lang={lang}
       onSetLang={setLangValue}
+      favorites={favorites}
+      onPlayFavorite={handlePlayFavorite}
     />
   );
 }
