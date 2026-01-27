@@ -28,6 +28,7 @@ export const AudioWave = memo(function AudioWave({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const isPlayingRef = useRef(isPlaying);
   const waveConfigsRef = useRef<WaveConfig[]>([]);
+  const beatIntensityRef = useRef(0);
 
   useEffect(() => {
     isPlayingRef.current = isPlaying;
@@ -54,7 +55,7 @@ export const AudioWave = memo(function AudioWave({
     let frameId = 0;
     let width = 0;
     let height = 0;
-    let amplitudeScale = 0.08;
+    let amplitudeScale = 0.12;
 
     const resize = () => {
       const nextWidth = canvas.offsetWidth;
@@ -74,10 +75,24 @@ export const AudioWave = memo(function AudioWave({
 
     const render = (time: number) => {
       const energy = levelRef?.current ?? 0.35;
-      const target = isPlayingRef.current
-        ? Math.min(1.4, Math.max(0.05, energy))
-        : 0.04;
-      amplitudeScale += (target - amplitudeScale) * 0.26;
+      const isActive = isPlayingRef.current;
+
+      // "Удар" по бочке: если уровень энергии выше порога — резко поднимаем beatIntensity.
+      if (isActive && energy > 0.7) {
+        beatIntensityRef.current = Math.min(
+          1.8,
+          beatIntensityRef.current + (energy - 0.7) * 2.2
+        );
+      } else {
+        beatIntensityRef.current *= 0.86;
+      }
+
+      const beatBoost = 1.2 + beatIntensityRef.current * 1.4;
+
+      const target = isActive
+        ? Math.min(2.1, Math.max(0.08, energy * beatBoost))
+        : 0.01; // когда пауза — почти плоская линия
+      amplitudeScale += (target - amplitudeScale) * 0.35;
 
       context.clearRect(0, 0, width, height);
       context.lineCap = "square";
@@ -87,16 +102,31 @@ export const AudioWave = memo(function AudioWave({
       const t = time * 0.001;
 
       const configs = waveConfigsRef.current;
-      configs.forEach((wave) => {
-        const amplitude = wave.amplitude * amplitudeScale * height * 0.5;
-        const step = Math.max(4, Math.floor(width / 80));
+      configs.forEach((wave, waveIndex) => {
+        // При паузе амплитуда принудительно обнуляется — получаем почти ровную линию.
+        const amplitude = isActive
+          ? wave.amplitude * amplitudeScale * height * 0.7
+          : 0;
+        const step = Math.max(2, Math.floor(width / 120));
         context.beginPath();
         let prevY = centerY;
         for (let x = 0; x <= width; x += step) {
           const progress = x / Math.max(width, 1);
           const angle =
-            progress * Math.PI * 2 * 1.6 + wave.phaseOffset + t * wave.speed;
-          const y = centerY + wave.yOffset * height + Math.sin(angle) * amplitude;
+            progress * Math.PI * 2 * 2.4 +
+            wave.phaseOffset +
+            t * wave.speed * (1.2 + waveIndex * 0.15);
+          // Хаос по вертикали: чем выше энергия, тем сильнее дрожание.
+          const jitterBase =
+            isActive && amplitude > 0
+              ? (levelRef?.current ?? 0.35) * (0.6 + waveIndex * 0.25)
+              : 0;
+          const jitter = (Math.random() - 0.5) * jitterBase * height;
+          const y =
+            centerY +
+            wave.yOffset * height +
+            Math.sin(angle) * amplitude +
+            jitter;
           if (x === 0) {
             context.moveTo(x, y);
           } else {
@@ -106,9 +136,12 @@ export const AudioWave = memo(function AudioWave({
           prevY = y;
         }
         context.strokeStyle = wave.color;
-        context.shadowBlur = 12;
+        context.shadowBlur = 16;
         context.shadowColor = wave.color;
-        context.lineWidth = lineWidth;
+        // Толщина линий тоже реагирует на удары бочки. На паузе возвращаемся к базовой.
+        context.lineWidth = isActive
+          ? lineWidth * (1.2 + beatIntensityRef.current * 1.4)
+          : lineWidth;
         context.stroke();
       });
 
@@ -127,7 +160,7 @@ export const AudioWave = memo(function AudioWave({
     <div className={className}>
       <canvas
         ref={canvasRef}
-        className={canvasClassName ?? "h-20 w-full max-w-2xl sm:h-24"}
+        className={canvasClassName ?? "h-32 w-full max-w-2xl sm:h-40"}
         aria-hidden="true"
       />
     </div>

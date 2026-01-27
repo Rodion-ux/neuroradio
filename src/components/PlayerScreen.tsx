@@ -328,7 +328,7 @@ export function PlayerScreen({
                 <div
                   className={`pixel-visualizer ${
                     isPlaying ? "visualizer-active" : "visualizer-muted"
-                  } absolute bottom-6 flex h-20 w-full items-center justify-center rounded-2xl px-0 sm:bottom-8 sm:h-28`}
+                  } absolute bottom-4 flex h-32 w-full items-center justify-center rounded-2xl px-0 sm:bottom-6 sm:h-40`}
                 >
                   <AudioWave
                     isPlaying={isPlaying}
