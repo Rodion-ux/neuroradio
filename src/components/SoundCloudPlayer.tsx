@@ -15,8 +15,8 @@ type SoundCloudWidget = {
   setVolume: (volume: number) => void; // 0..100
   seekTo: (milliseconds: number) => void;
   getDuration: (callback: (milliseconds: number) => void) => void;
-  bind: (event: string, listener: () => void) => void;
-  unbind: (event: string, listener?: () => void) => void;
+  bind: (event: string, listener: ((...args: any[]) => void) | (() => void)) => void;
+  unbind: (event: string, listener?: ((...args: any[]) => void) | (() => void)) => void;
 };
 
 declare global {
