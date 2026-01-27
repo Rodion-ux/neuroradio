@@ -5,6 +5,10 @@ import { IdleScreen } from "../components/IdleScreen";
 import { LoadingScreen } from "../components/LoadingScreen";
 import { PlayerScreen } from "../components/PlayerScreen";
 import { processTextInput } from "../lib/radio-engine";
+import {
+  SoundCloudPlayer,
+  type SoundCloudPlayerHandle,
+} from "../components/SoundCloudPlayer";
 
 type ScreenState = "idle" | "loading" | "playing";
 type PlaybackState = "idle" | "playing" | "paused" | "blocked";
@@ -25,6 +29,17 @@ type FavoriteStation = {
   url_resolved: string;
   tags: string[];
   favicon?: string;
+};
+
+type Mix = {
+  id: number;
+  title: string;
+  user: {
+    username: string;
+  };
+  artwork_url: string | null;
+  duration: number;
+  permalink_url: string;
 };
 
 const FAVORITES_KEY = "neuroradio_favorites";
@@ -212,6 +227,10 @@ const translations = {
     RU: "ПОДКЛЮЧАЙСЯ...",
     EN: "TUNE IN...",
   },
+  loadingMixes: {
+    RU: "СКАНИРУЮ ОБЛАКО...",
+    EN: "SCANNING CLOUD...",
+  },
   copied: {
     RU: "[ СКОПИРОВАНО! ]",
     EN: "[ COPIED! ]",
@@ -237,6 +256,7 @@ const translations = {
 type TranslationKey = keyof typeof translations;
 
 export default function Home() {
+  const [mode, setMode] = useState<"radio" | "mixes">("radio");
   const [lang, setLang] = useState<Lang>("RU");
   const [screen, setScreen] = useState<ScreenState>("idle");
   const [isConnecting, setIsConnecting] = useState(false);
@@ -253,6 +273,10 @@ export default function Home() {
   const [aiReasoning, setAiReasoning] = useState("");
   const [favorites, setFavorites] = useState<FavoriteStation[]>([]);
   const [volume, setVolume] = useState(0.7);
+  const [playlist, setPlaylist] = useState<Mix[]>([]);
+  const [currentMixIndex, setCurrentMixIndex] = useState(0);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audioReadyRef = useRef(false);
   const sessionRef = useRef(0);
@@ -275,6 +299,7 @@ export default function Home() {
   const preloadInProgressRef = useRef(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const isLoadingRef = useRef(false);
+  const soundcloudRef = useRef<SoundCloudPlayerHandle | null>(null);
   const audioEventHandlersRef = useRef<{
     handlePlay?: () => void;
     handlePause?: () => void;
@@ -286,6 +311,7 @@ export default function Home() {
   }>({});
 
   const isMuted = volume === 0;
+  const currentMix = playlist[currentMixIndex] ?? null;
 
   // Функции для работы с кэшем станций в localStorage
   const CACHE_KEY_PREFIX = "neuro_radio_cache_";
@@ -524,13 +550,19 @@ export default function Home() {
 
   useEffect(() => {
     const audio = audioRef.current;
-    if (!audio) return;
-    if (volumeFadeRef.current) {
-      cancelAnimationFrame(volumeFadeRef.current);
-      volumeFadeRef.current = null;
+    if (mode === "radio") {
+      if (!audio) return;
+      if (volumeFadeRef.current) {
+        cancelAnimationFrame(volumeFadeRef.current);
+        volumeFadeRef.current = null;
+      }
+      audio.volume = volume;
+    } else {
+      if (soundcloudRef.current) {
+        soundcloudRef.current.setVolume(volume);
+      }
     }
-    audio.volume = volume;
-  }, [volume]);
+  }, [volume, mode]);
 
   useEffect(() => {
     activeTagRef.current = activeTag;
@@ -1468,281 +1500,115 @@ export default function Home() {
       console.log("Already loading, ignoring duplicate request");
       return;
     }
-    
+
     // Отменяем предыдущий запрос при быстром переключении жанров через AbortController
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
     }
-    
+
     isLoadingRef.current = true;
     const sessionId = sessionRef.current + 1;
     sessionRef.current = sessionId;
-    const isQuickTag = Boolean(tagOverride);
-    
-    // Полный сброс аудио перед началом поиска
+
+    // Полный сброс аудио перед началом поиска (на всякий случай, если радио ещё играло)
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current.src = "";
       audioRef.current.load();
     }
-    
-    // Initialize UI
+
+    // Базовая инициализация UI
     setScreen("loading");
     setIsConnecting(true);
     setConnectionProgress(0);
-    setStations([]);
     setStationName("");
     setTrackTitle(null);
     setPlaybackState("idle");
     setStatusText(t("statusTuning"));
+    setStatusDetail(t("aiAnalyzing"));
     setAiReasoning("");
-    failedCountRef.current = 0;
-    activeStationUrlRef.current = null;
 
-    const processed = isQuickTag ? null : processTextInput(userActivity);
-    let initialTag = isQuickTag
-      ? (tagOverride ?? "lofi").toLowerCase().trim()
-      : (processed?.tag ?? "lofi");
-    let useRandomOrder = isQuickTag ? true : (processed?.useRandomOrder ?? false);
-    let selectedGenre = isQuickTag ? initialTag : (processed?.genre ?? initialTag);
+    // Если выбран явный жанр (быстрые кнопки) — используем genre-based поиск.
+    if (tagOverride) {
+      const selectedGenre = tagOverride.toLowerCase().trim();
+      setStationTag(selectedGenre.toUpperCase());
+      setActiveTag(selectedGenre);
+      activeTagRef.current = selectedGenre;
 
-    const isFallback =
-      !isQuickTag &&
-      (processed?.category === "FALLBACK" || selectedGenre === "lofi");
-
-    if (isFallback && userActivity.trim().length > 3) {
-      setStatusDetail(t("aiAnalyzing"));
-      console.log("DEBUG: Calling AI with text:", userActivity);
       try {
-        const response = await fetch("/api/dj", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            text: userActivity,
-            lang: lang === "RU" ? "ru" : "en",
-          }),
-        });
-        if (response.ok) {
-          const data = await response.json();
-          if (data?.genre && data.genre !== "random") {
-            selectedGenre = String(data.genre).toLowerCase().trim();
-            initialTag = selectedGenre;
-            useRandomOrder = true;
-          }
-          if (data?.reasoning) {
-            setAiReasoning(String(data.reasoning));
-          }
-        }
-      } catch (error) {
-        console.error("AI request failed, staying with lofi:", error);
+        await fetchMixes(selectedGenre);
       } finally {
-        // no-op
+        if (sessionId === sessionRef.current) {
+          isLoadingRef.current = false;
+        }
       }
+      return;
     }
 
-    // Синхронно обновляем жанр ДО начала запроса, чтобы UI не отставал
-    setStationTag(selectedGenre.toUpperCase());
-    setActiveTag(initialTag);
-    activeTagRef.current = initialTag;
-
-    // ПРИОРИТЕТ 1: Проверяем "Золотой Фонд" (verifiedStations) перед запросом к API
-    const unplayedVerified = getUnplayedVerifiedStations(initialTag);
-    // Фильтруем verified станции через черный список
-    const verifiedFiltered = filterBlacklistedStations(unplayedVerified);
-    if (verifiedFiltered.length > 0) {
-      console.log(`Found ${verifiedFiltered.length} unplayed verified stations in "Golden Fund" for genre "${initialTag}" (${unplayedVerified.length - verifiedFiltered.length} filtered by blacklist)`);
-      
-      // Выбираем случайную станцию из "Золотого Фонда"
-      const randomVerified = verifiedFiltered[Math.floor(Math.random() * verifiedFiltered.length)];
-      
-      // Создаем временный список станций с verified станцией
-      const tempStationList = [randomVerified];
-      stationsRef.current = tempStationList;
-      setStations(tempStationList);
-      stationIndexRef.current = 0;
-      setStationIndex(0);
-      
-      // Устанавливаем статус "МГНОВЕННОЕ ПОДКЛЮЧЕНИЕ"
-      setStatusText(t("instantConnection"));
-      setStatusDetail(undefined);
-      
-      // Немедленно запускаем воспроизведение из "Золотого Фонда"
-      try {
-        await startStationPlayback(0);
-        setScreen("playing");
-        setIsConnecting(false);
-        isLoadingRef.current = false;
-        
-        // Запускаем фоновый запрос к API для обновления списка (не блокируем UI)
-        void (async () => {
-          try {
-            const { stations: freshStations } = await fetchStations(initialTag, useRandomOrder);
-            if (freshStations.length > 0 && sessionId === sessionRef.current) {
-              // Обновляем список станций, но не прерываем текущее воспроизведение
-              stationsRef.current = freshStations;
-              setStations(freshStations);
-              console.log(`Updated station list with ${freshStations.length} fresh stations from API`);
-            }
-          } catch (error) {
-            // Игнорируем ошибки фонового запроса - у нас уже есть рабочая станция из "Золотого Фонда"
-            console.warn("Background station fetch failed (non-critical):", error);
-          }
-        })();
-        
-        return; // Выходим, так как уже запустили станцию из "Золотого Фонда"
-      } catch (error) {
-        // Если verified станция не загрузилась, удаляем её и продолжаем стандартный поиск
-        console.warn("Verified station from Golden Fund failed to load, removing from cache:", error);
-        removeVerifiedStation(randomVerified.urlResolved, initialTag);
-        // Продолжаем стандартный поиск ниже
-      }
-    }
-
-    // ПРИОРИТЕТ 2: Проверяем обычный кэш перед запросом к API
-    const cachedStations = getCachedStations(initialTag);
-    // Фильтруем кэшированные станции через черный список
-    const cachedFiltered = filterBlacklistedStations(cachedStations);
-    if (cachedFiltered.length > 0) {
-      console.log(`Found ${cachedFiltered.length} cached stations for genre "${initialTag}" (${cachedStations.length - cachedFiltered.length} filtered by blacklist)`);
-      
-      // Выбираем случайную станцию из отфильтрованного кэша
-      const randomCachedStation = cachedFiltered[Math.floor(Math.random() * cachedFiltered.length)];
-      
-      // Создаем временный список станций с кэшированной станцией
-      const tempStationList = [randomCachedStation];
-      stationsRef.current = tempStationList;
-      setStations(tempStationList);
-      stationIndexRef.current = 0;
-      setStationIndex(0);
-      
-      // Устанавливаем статус "МГНОВЕННОЕ ПОДКЛЮЧЕНИЕ"
-      setStatusText(t("instantConnection"));
-      setStatusDetail(undefined);
-      
-      // Немедленно запускаем воспроизведение из кэша
-      try {
-        await startStationPlayback(0);
-        setScreen("playing");
-        setIsConnecting(false);
-        isLoadingRef.current = false;
-        
-        // Запускаем фоновый запрос к API для обновления списка (не блокируем UI)
-        void (async () => {
-          try {
-            const { stations: freshStations } = await fetchStations(initialTag, useRandomOrder);
-            if (freshStations.length > 0 && sessionId === sessionRef.current) {
-              // Обновляем список станций, но не прерываем текущее воспроизведение
-              stationsRef.current = freshStations;
-              setStations(freshStations);
-              console.log(`Updated station list with ${freshStations.length} fresh stations`);
-            }
-          } catch (error) {
-            // Игнорируем ошибки фонового запроса - у нас уже есть рабочая станция из кэша
-            console.warn("Background station fetch failed (non-critical):", error);
-          }
-        })();
-        
-        return; // Выходим, так как уже запустили станцию из кэша
-      } catch (error) {
-        // Если кэшированная станция не загрузилась, удаляем её из кэша и продолжаем стандартный поиск
-        console.warn("Cached station failed to load, removing from cache:", error);
-        removeStationFromCache(randomCachedStation.urlResolved, initialTag);
-        // Продолжаем стандартный поиск ниже
-      }
-    }
-
-    // Стандартный поиск через API (если кэш пуст или кэшированная станция не загрузилась)
-    if (isQuickTag) {
-      setStatusDetail(format("statusSearchingFor", { tag: initialTag }));
-    } else {
-      setStatusDetail(
-        format("vibeDetail", {
-          genre: selectedGenre.toUpperCase(),
-        })
-      );
-    }
-
+    // AI-курирование: отправляем текст на бэкенд, который сам вызывает OpenAI + SoundCloud.
     try {
-      let resolvedTag = initialTag;
-      let stationList: Station[] = [];
-      let secureIndex = -1;
+      const response = await fetch("/api/radio/ai-mixes", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          text: userActivity.trim().length ? userActivity : t("statusIdle"),
+          lang: lang === "RU" ? "ru" : "en",
+        }),
+      });
 
-      for (let attempt = 0; attempt < 3 && secureIndex === -1; attempt += 1) {
-        let result: { tag: string; stations: Station[] } | null = null;
-        try {
-          // Для быстрых жанров (кнопки) используем максимально быстрый путь без AI.
-          // Для свободного текста и fallback-сценариев — включаем AI-валидатор.
-          const useAiForThisSearch = !isQuickTag;
-          result = await fetchStations(
-            resolvedTag,
-            useRandomOrder,
-            useAiForThisSearch ? { showStatus: true } : undefined
-          );
-          if (sessionId !== sessionRef.current) return;
-          stationList = result.stations;
-        } catch (error) {
-          // Игнорируем ошибки отмены запроса
-          if (error instanceof Error && error.name === 'AbortError') {
-            console.log("Request was aborted during search");
-            return;
-          }
-          throw error;
-        }
-        
-        if (!result) {
-          throw new Error("Failed to fetch stations");
-        }
-        
-        if (!isQuickTag) {
-          resolvedTag = result.tag;
-        }
-        setStationTag(selectedGenre.toUpperCase());
-        setActiveTag(resolvedTag);
-
-        if (!stationList.length) {
-          console.warn(
-            `No stations found for tag "${resolvedTag}" on attempt ${attempt + 1}`
-          );
-          // Пробуем еще раз (до 3 попыток), не ломая сразу UX.
-          continue;
-        }
-
-        // Все станции уже прошли фильтрацию на бэкенде (HTTPS, lastcheckok: 1, релевантность)
-        // Просто выбираем случайную станцию из списка (уже перемешанного на бэкенде)
-        secureIndex = Math.floor(Math.random() * stationList.length);
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.error ?? "Failed to fetch AI-curated mixes");
       }
 
-      // Если после всех попыток так и не нашли ни одной станции — показываем
-      // понятное сообщение об ошибке.
-      if (secureIndex < 0 || !stationList.length) {
-        throw new Error("No stations found");
+      const data = (await response.json()) as {
+        mixes: Mix[];
+        ai: { search_term: string; min_duration_minutes: number; mood_tag: string };
+      };
+
+      if (!Array.isArray(data.mixes) || data.mixes.length === 0) {
+        throw new Error("No mixes found");
       }
 
-      setStations(stationList);
-      stationsRef.current = stationList;
-      
-      // Мгновенный запуск станции через startStationPlayback
-      // Проходит через все фильтры качества (HTTPS, lastcheckok, релевантность жанру)
-      await startStationPlayback(secureIndex);
-      
-      if (sessionId === sessionRef.current) {
-        if (isQuickTag) {
-          setStatusDetail(t("statusSignalLocked"));
-        }
-        setScreen("playing");
-        setIsConnecting(false);
-        isLoadingRef.current = false;
+      const mixes = data.mixes;
+      setMode("mixes");
+      setPlaylist(mixes);
+      setCurrentMixIndex(0);
+      setCurrentTime(0);
+      setDuration(0);
+
+      const first = mixes[0];
+
+      const moodTag =
+        typeof data.ai?.mood_tag === "string" && data.ai.mood_tag.trim().length
+          ? data.ai.mood_tag.trim()
+          : data.ai?.search_term ?? "mix";
+
+      const uiTag = moodTag.toUpperCase();
+      setStationTag(uiTag);
+      setActiveTag(moodTag.toLowerCase());
+      activeTagRef.current = moodTag.toLowerCase();
+
+      setStationName(first.title || t("unknownStation"));
+      setTrackTitle(first.user?.username ?? null);
+      setStatusDetail(t("statusSignalLocked"));
+      setAiReasoning(
+        `[AI CURATOR] ${data.ai.search_term} • ${data.ai.min_duration_minutes} min`
+      );
+
+      if (soundcloudRef.current) {
+        soundcloudRef.current.loadTrack(first.id, true);
       }
+
+      setScreen("playing");
+      setPlaybackState("playing");
     } catch (error) {
-      // Игнорируем ошибки отмены запроса
-      if (error instanceof Error && error.name === 'AbortError') {
-        console.log("Request was aborted");
-        return;
-      }
-      console.error("Station fetch error:", error);
+      console.error("AI curated mixes error:", error);
       setStatusText(
-        error instanceof Error ? error.message : "Unable to find live stations"
+        error instanceof Error ? error.message : "Unable to fetch AI-curated mixes"
       );
       setScreen("idle");
     } finally {
@@ -1834,7 +1700,7 @@ export default function Home() {
       window.clearTimeout(stalledTimeoutRef.current);
       stalledTimeoutRef.current = null;
     }
-    // Полная остановка и очистка аудио
+    // Полная остановка и очистка аудио (радио-режим)
     if (audioRef.current) {
       audioRef.current.pause();
       
@@ -1906,10 +1772,20 @@ export default function Home() {
     // Сбрасываем флаг готовности
     audioReadyRef.current = false;
     
+    // Останавливаем SoundCloud-виджет (режим миксов), чтобы не было "призрачного" воспроизведения.
+    if (soundcloudRef.current) {
+      soundcloudRef.current.pause();
+    }
+
     // Clear preloaded stations when stopping
     preloadedStationsRef.current = [];
     preloadInProgressRef.current = false;
     isLoadingRef.current = false;
+    setMode("radio");
+    setPlaylist([]);
+    setCurrentMixIndex(0);
+    setCurrentTime(0);
+    setDuration(0);
     setScreen("idle");
     setStations([]);
     setStationName("");
@@ -1924,7 +1800,40 @@ export default function Home() {
   };
 
   const handleTogglePlay = async () => {
-    if (isConnecting || isSwitchingRef.current || !audioRef.current) return;
+    if (isConnecting || isSwitchingRef.current) return;
+
+    if (mode === "mixes") {
+      if (!soundcloudRef.current || !currentMix) return;
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/574a7f99-6c21-48ad-9731-30948465c78f',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({
+          sessionId:'debug-session',
+          runId:'pre-fix',
+          hypothesisId:'H5',
+          location:'page.tsx:handleTogglePlay[mixes]',
+          message:'Toggle play in mixes mode',
+          data:{
+            playbackState,
+            hasWidget: !!soundcloudRef.current,
+            currentMixId: currentMix?.id ?? null
+          },
+          timestamp:Date.now()
+        })
+      }).catch(()=>{});
+      // #endregion agent log
+      if (playbackState === "playing") {
+        soundcloudRef.current.pause();
+        setPlaybackState("paused");
+      } else {
+        soundcloudRef.current.play();
+        setPlaybackState("playing");
+      }
+      return;
+    }
+
+    if (!audioRef.current) return;
     if (playbackState === "playing") {
       audioRef.current.pause();
       setPlaybackState("paused");
@@ -1963,7 +1872,66 @@ export default function Home() {
   };
 
   const handleNextStation = async () => {
-    if (isConnecting || isSwitchingRef.current || isLoadingRef.current) return;
+    if (isConnecting || isSwitchingRef.current || isLoadingRef.current) {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/574a7f99-6c21-48ad-9731-30948465c78f',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({
+          sessionId:'debug-session',
+          runId:'pre-fix',
+          hypothesisId:'H3',
+          location:'page.tsx:handleNextStation[guard]',
+          message:'Next station blocked by guard flags',
+          data:{
+            isConnecting,
+            isSwitching: isSwitchingRef.current,
+            isLoading: isLoadingRef.current,
+            mode
+          },
+          timestamp:Date.now()
+        })
+      }).catch(()=>{});
+      // #endregion agent log
+      return;
+    }
+
+    // Режим миксов SoundCloud
+    if (mode === "mixes") {
+      if (!playlist.length || !soundcloudRef.current) return;
+      const count = playlist.length;
+      let nextIndex = Math.floor(Math.random() * count);
+      if (count > 1 && nextIndex === currentMixIndex) {
+        nextIndex = (nextIndex + 1) % count;
+      }
+      const nextMix = playlist[nextIndex];
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/574a7f99-6c21-48ad-9731-30948465c78f',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({
+          sessionId:'debug-session',
+          runId:'pre-fix',
+          hypothesisId:'H3',
+          location:'page.tsx:handleNextStation[mixes]',
+          message:'Next mix requested (random)',
+          data:{
+            playlistLength: playlist.length,
+            currentMixIndex,
+            nextIndex,
+            nextMixId: nextMix?.id ?? null
+          },
+          timestamp:Date.now()
+        })
+      }).catch(()=>{});
+      // #endregion agent log
+      setCurrentMixIndex(nextIndex);
+      setStationName(nextMix.title || t("unknownStation"));
+      setTrackTitle(nextMix.user?.username ?? null);
+      soundcloudRef.current.loadTrack(nextMix.id, true);
+      setPlaybackState("playing");
+      return;
+    }
     
     // АВТО-БАН (UX): Если пользователь нажал Next в первые 5 секунд, баним станцию
     if (stationPlayStartTimeRef.current) {
@@ -2076,6 +2044,19 @@ export default function Home() {
 
   const handlePrevStation = () => {
     if (isConnecting || isSwitchingRef.current) return;
+
+    // Режим миксов SoundCloud
+    if (mode === "mixes") {
+      if (!playlist.length || !soundcloudRef.current) return;
+      const prevIndex = (currentMixIndex - 1 + playlist.length) % playlist.length;
+      const prevMix = playlist[prevIndex];
+      setCurrentMixIndex(prevIndex);
+      setStationName(prevMix.title || t("unknownStation"));
+      setTrackTitle(prevMix.user?.username ?? null);
+      soundcloudRef.current.loadTrack(prevMix.id, true);
+      setPlaybackState("playing");
+      return;
+    }
     const list = stationsRef.current;
     if (!list.length) return;
     failedCountRef.current = 0;
@@ -2175,8 +2156,193 @@ export default function Home() {
       // Сбрасываем состояние
       activeStationUrlRef.current = null;
       setPlaybackState("idle");
+
+      // Дополнительно останавливаем SoundCloud-виджет (режим миксов),
+      // чтобы звук гарантированно прекращался при выходе на главный экран.
+      if (soundcloudRef.current) {
+        soundcloudRef.current.pause();
+      }
     }
   }, [screen]);
+
+  const handleMixFinish = () => {
+    if (!playlist.length || !soundcloudRef.current) {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/574a7f99-6c21-48ad-9731-30948465c78f',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({
+          sessionId:'debug-session',
+          runId:'pre-fix',
+          hypothesisId:'H2',
+          location:'page.tsx:handleMixFinish[guard]',
+          message:'handleMixFinish guard prevented autoplay',
+          data:{
+            playlistLength: playlist.length,
+            hasWidget: !!soundcloudRef.current,
+            currentMixIndex
+          },
+          timestamp:Date.now()
+        })
+      }).catch(()=>{});
+      // #endregion agent log
+      return;
+    }
+    const nextIndex = (currentMixIndex + 1) % playlist.length;
+    const nextMix = playlist[nextIndex];
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/574a7f99-6c21-48ad-9731-30948465c78f',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        sessionId:'debug-session',
+        runId:'pre-fix',
+        hypothesisId:'H2',
+        location:'page.tsx:handleMixFinish',
+        message:'handleMixFinish called',
+        data:{
+          playlistLength: playlist.length,
+          currentMixIndex,
+          nextIndex,
+          nextMixId: nextMix?.id ?? null
+        },
+        timestamp:Date.now()
+      })
+    }).catch(()=>{});
+    // #endregion agent log
+    setCurrentMixIndex(nextIndex);
+    setStationName(nextMix.title || t("unknownStation"));
+    setTrackTitle(nextMix.user?.username ?? null);
+    soundcloudRef.current.loadTrack(nextMix.id, true);
+    setPlaybackState("playing");
+  };
+
+  const handleMixProgress = (positionMs: number, durationMs: number) => {
+    setCurrentTime(positionMs / 1000);
+    setDuration(durationMs > 0 ? durationMs / 1000 : 0);
+  };
+
+  const handleSeek = (seconds: number) => {
+    if (!soundcloudRef.current || !Number.isFinite(seconds)) return;
+    soundcloudRef.current.seekTo(seconds);
+    setCurrentTime(seconds);
+  };
+
+  const [isLoadingMixes, setIsLoadingMixes] = useState(false);
+
+  const fetchMixes = async (genre: string) => {
+    try {
+      setIsLoadingMixes(true);
+      // Мгновенно обновляем отображаемый жанр до начала запроса,
+      // чтобы экран загрузки показывал корректный тег (без "JAZZ" от прошлого состояния).
+      const normalizedGenre = genre.toLowerCase();
+      setStationTag(normalizedGenre.toUpperCase());
+      setActiveTag(normalizedGenre);
+      activeTagRef.current = normalizedGenre;
+
+      setMode("mixes");
+      setIsConnecting(true);
+      setScreen("loading");
+      setStatusText(t("statusTuning"));
+      setStatusDetail(format("statusSearchingFor", { tag: normalizedGenre }));
+
+      // Останавливаем радио-аудио, если оно сейчас играет.
+      if (audioRef.current) {
+        audioRef.current.pause();
+      }
+
+      const response = await fetch(
+        `/api/radio/mixes?genre=${encodeURIComponent(normalizedGenre)}`
+      );
+      if (!response.ok) {
+        let message = `Failed to fetch mixes (${response.status})`;
+        try {
+          const body = await response.json();
+          if (body?.error || body?.details) {
+            const extra = [body.error, body.details].filter(Boolean).join(" — ");
+            if (extra) {
+              message = extra;
+            }
+          }
+        } catch {
+          // ignore body parse errors
+        }
+        throw new Error(message);
+      }
+      const data = (await response.json()) as Mix[];
+      if (!Array.isArray(data) || data.length === 0) {
+        throw new Error("No mixes found");
+      }
+
+      setPlaylist(data);
+      setCurrentMixIndex(0);
+      const first = data[0];
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/574a7f99-6c21-48ad-9731-30948465c78f',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({
+          sessionId:'debug-session',
+          runId:'pre-fix',
+          hypothesisId:'H4',
+          location:'page.tsx:fetchMixes',
+          message:'Fetched mixes playlist',
+          data:{
+            genre,
+            count: data.length,
+            firstId: first?.id ?? null,
+            firstTitle: first?.title ?? null,
+            firstDj: first?.user?.username ?? null
+          },
+          timestamp:Date.now()
+        })
+      }).catch(()=>{});
+      // #endregion agent log
+      // stationTag / activeTag уже выставлены выше,
+      // здесь просто убеждаемся, что они синхронизированы с нормализованным значением.
+      setStationTag(normalizedGenre.toUpperCase());
+      setActiveTag(normalizedGenre);
+      setStationName(first.title || t("unknownStation"));
+      setTrackTitle(first.user?.username ?? null);
+      setStatusDetail(t("statusSignalLocked"));
+
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/574a7f99-6c21-48ad-9731-30948465c78f',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({
+          sessionId:'debug-session',
+          runId:'pre-fix',
+          hypothesisId:'H7',
+          location:'page.tsx:fetchMixes',
+          message:'About to call loadTrack for first mix',
+          data:{
+            hasRef: !!soundcloudRef.current,
+            firstId: first?.id ?? null
+          },
+          timestamp:Date.now()
+        })
+      }).catch(()=>{});
+      // #endregion agent log
+
+      if (soundcloudRef.current) {
+        soundcloudRef.current.loadTrack(first.id, true);
+      }
+
+      setScreen("playing");
+      setPlaybackState("playing");
+    } catch (error) {
+      console.error("Failed to fetch mixes:", error);
+      setStatusText(
+        error instanceof Error ? error.message : "Unable to fetch mixes"
+      );
+      setScreen("idle");
+    } finally {
+      setIsLoadingMixes(false);
+      setIsConnecting(false);
+      setConnectionProgress(100);
+    }
+  };
 
   useEffect(() => {
     if (screen !== "playing") return;
@@ -2262,88 +2428,130 @@ export default function Home() {
     };
   }, [playbackState]);
 
+  const soundCloudPlayer = (
+    <SoundCloudPlayer
+      ref={soundcloudRef}
+      trackId={currentMix?.id}
+      onFinish={handleMixFinish}
+      onProgress={handleMixProgress}
+    />
+  );
+
+  // Глобовый cleanup на размонтирование `Home`:
+  // гарантируем, что и радио-аудио, и SoundCloud-виджет будут остановлены.
+  useEffect(() => {
+    return () => {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.src = "";
+        audioRef.current.load();
+      }
+      if (soundcloudRef.current) {
+        soundcloudRef.current.pause();
+      }
+    };
+  }, []);
+
   if (screen === "loading") {
     return (
-      <LoadingScreen
-        progress={connectionProgress}
-        title={format("scanningAirwaves", { tag: stationTag })}
-        statusLine={statusDetail}
-        cancelLabel={t("cancel")}
-        lang={lang}
-        onSetLang={setLangValue}
-      />
+      <>
+        {soundCloudPlayer}
+        <LoadingScreen
+          progress={connectionProgress}
+          title={format("scanningAirwaves", { tag: stationTag })}
+          statusLine={statusDetail}
+          cancelLabel={t("cancel")}
+          lang={lang}
+          onSetLang={setLangValue}
+        />
+      </>
     );
   }
 
   if (screen === "playing") {
     return (
-      <PlayerScreen
-        stationName={stationName || t("searching")}
-        currentTag={stationTag}
-        trackTitle={trackTitle ?? undefined}
-        onStop={handleStop}
-        onTogglePlay={handleTogglePlay}
-        onNextStation={handleNextStation}
-        onPrevStation={handlePrevStation}
-        isPlaying={playbackState === "playing"}
-        statusText={
-          playbackState === "blocked" ? t("statusAudioBlocked") : statusText
-        }
-        statusDetail={statusDetail}
-        aiReasoning={aiReasoning}
-        isConnecting={isConnecting}
-        labels={{
-          nowPlaying: t("nowPlaying"),
-          genre: t("genre"),
-          liveStream: t("liveStream"),
-          stop: t("stopButton"),
-          trackFallback: t("trackFallback"),
-          copied: t("copied"),
-          addFavorite: t("addFavorite"),
-          removeFavorite: t("removeFavorite"),
-          favoriteAdded: t("favoriteAdded"),
-        }}
-        lang={lang}
-        onSetLang={setLangValue}
-        audioLevelRef={audioLevelRef}
-        accentColor={resolveAccentColor(activeTag)}
-        isFavorite={isFavorite}
-        onToggleFavorite={handleToggleFavorite}
-        volume={volume}
-        isMuted={isMuted}
-        onVolumeChange={handleVolumeChange}
-        onToggleMute={handleToggleMute}
-      />
+      <>
+        {soundCloudPlayer}
+        <PlayerScreen
+          stationName={stationName || t("searching")}
+          currentTag={stationTag}
+          trackTitle={trackTitle ?? undefined}
+          onStop={handleStop}
+          onTogglePlay={handleTogglePlay}
+          onNextStation={handleNextStation}
+          onPrevStation={handlePrevStation}
+          isPlaying={playbackState === "playing"}
+          statusText={
+            playbackState === "blocked" ? t("statusAudioBlocked") : statusText
+          }
+          statusDetail={statusDetail}
+          aiReasoning={aiReasoning}
+          isConnecting={isConnecting}
+          labels={{
+            nowPlaying: t("nowPlaying"),
+            genre: t("genre"),
+            liveStream: t("liveStream"),
+            stop: t("stopButton"),
+            trackFallback: t("trackFallback"),
+            copied: t("copied"),
+            addFavorite: t("addFavorite"),
+            removeFavorite: t("removeFavorite"),
+            favoriteAdded: t("favoriteAdded"),
+          }}
+          lang={lang}
+          onSetLang={setLangValue}
+          audioLevelRef={audioLevelRef}
+          accentColor={resolveAccentColor(activeTag)}
+          isFavorite={isFavorite}
+          onToggleFavorite={handleToggleFavorite}
+          volume={volume}
+          isMuted={isMuted}
+          onVolumeChange={handleVolumeChange}
+          onToggleMute={handleToggleMute}
+          currentTime={currentTime}
+          duration={duration}
+          onSeek={handleSeek}
+        />
+      </>
     );
   }
 
   return (
-    <IdleScreen
-      onStart={(activity, tagOverride) =>
-        handleStart(activity.trim().length ? activity : t("statusIdle"), tagOverride)
-      }
-      labels={{
-        tagLine: t("tagLine"),
-        title: t("title"),
-        subtitle: t("subtitle"),
-        inputLabel: t("inputLabel"),
-        placeholder: t("placeholder"),
-        startButton: t("startButton"),
-        quickVibes: t("quickVibes"),
-        favoritesTitle: t("favoritesTitle"),
-        removeFavorite: t("removeFavorite"),
-      }}
-      lang={lang}
-      onSetLang={setLangValue}
-      favorites={favorites}
-      onPlayFavorite={handlePlayFavorite}
-      onRemoveFavorite={(id) => {
-        setFavorites((prev) => {
-          const next = prev.filter((item) => item.changeuuid !== id);
-          writeFavorites(next);
-          return next;
-        });
-      }}
-    />
+    <>
+      {soundCloudPlayer}
+      <IdleScreen
+        onStart={(activity, tagOverride) =>
+          handleStart(
+            activity.trim().length ? activity : t("statusIdle"),
+            tagOverride
+          )
+        }
+        onGenreClick={fetchMixes}
+        labels={{
+          tagLine: t("tagLine"),
+          title: t("title"),
+          subtitle: t("subtitle"),
+          inputLabel: t("inputLabel"),
+          placeholder: t("placeholder"),
+          startButton: t("startButton"),
+          quickVibes: t("quickVibes"),
+          favoritesTitle: t("favoritesTitle"),
+          removeFavorite: t("removeFavorite"),
+        }}
+        isLoadingMixes={isLoadingMixes}
+        loadingStartLabel={t("loadingMixes")}
+        lang={lang}
+        onSetLang={setLangValue}
+        favorites={favorites}
+        onPlayFavorite={handlePlayFavorite}
+        onRemoveFavorite={(id) => {
+          setFavorites((prev) => {
+            const next = prev.filter((item) => item.changeuuid !== id);
+            writeFavorites(next);
+            return next;
+          });
+        }}
+      />
+    </>
   );
 }

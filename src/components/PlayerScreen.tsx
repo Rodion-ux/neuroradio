@@ -23,7 +23,6 @@ type PlayerScreenProps = {
   labels: {
     nowPlaying: string;
     genre: string;
-    liveStream: string;
     stop: string;
     trackFallback: string;
     copied: string;
@@ -41,6 +40,9 @@ type PlayerScreenProps = {
   isMuted: boolean;
   onVolumeChange: (value: number) => void;
   onToggleMute: () => void;
+  currentTime: number;
+  duration: number;
+  onSeek: (seconds: number) => void;
 };
 
 const HeartIcon = ({
@@ -125,6 +127,9 @@ export function PlayerScreen({
   isMuted,
   onVolumeChange,
   onToggleMute,
+  currentTime,
+  duration,
+  onSeek,
 }: PlayerScreenProps) {
   const [copied, setCopied] = useState(false);
   const copyTimeoutRef = useRef<number | null>(null);
@@ -169,6 +174,19 @@ export function PlayerScreen({
   const volumeStyle: React.CSSProperties & { [key: string]: string | number } = {
     ["--volume-fill"]: `${Math.round(volumeValue * 100)}%`,
     ["--volume-track-color"]: volumeColorVar,
+  };
+  const safeDuration = duration > 0 ? duration : 0;
+  const clampedCurrentTime =
+    safeDuration > 0 ? Math.min(Math.max(currentTime, 0), safeDuration) : 0;
+
+  const formatTime = (seconds: number) => {
+    if (!Number.isFinite(seconds) || seconds <= 0) return "00:00";
+    const s = Math.floor(seconds);
+    const mPart = Math.floor(s / 60);
+    const sPart = s % 60;
+    const mm = mPart.toString().padStart(2, "0");
+    const ss = sPart.toString().padStart(2, "0");
+    return `${mm}:${ss}`;
   };
 
   if (shouldMarquee) {
@@ -320,14 +338,35 @@ export function PlayerScreen({
                     levelRef={audioLevelRef}
                   />
                 </div>
-                <div className="pointer-events-none absolute right-4 top-4 flex items-center gap-2 text-[7px] uppercase tracking-[0.25em] text-neon sm:right-6 sm:top-6 sm:text-[9px] sm:tracking-[0.3em]">
-                  <span className="live-dot h-2 w-2 rounded-full" />
-                  {labels.liveStream}
-                </div>
               </div>
             </div>
 
-            <div className="flex w-full flex-nowrap items-center justify-center gap-4">
+            {/* Перемотка / таймлайн */}
+            <div className="mt-2 flex w-full max-w-2xl flex-col items-center gap-1 sm:mt-3">
+              <input
+                type="range"
+              min="0"
+              max={safeDuration}
+                step={1}
+                value={clampedCurrentTime}
+                onChange={(event) => onSeek(Number(event.target.value))}
+                className="seek-slider h-4 w-full"
+                style={{
+                  // Используем те же неоновые цвета, что и для громкости
+                  ["--seek-fill" as string]: safeDuration
+                    ? `${Math.round((clampedCurrentTime / safeDuration) * 100)}%`
+                    : "0%",
+                  ["--seek-track-color" as string]: volumeColorVar,
+                }}
+                aria-label="Seek"
+              />
+              <div className="flex w-full justify-between text-[8px] font-mono tracking-[0.2em] text-neon/70 sm:text-[9px]">
+                <span>{formatTime(clampedCurrentTime)}</span>
+                <span>{formatTime(safeDuration)}</span>
+              </div>
+            </div>
+
+            <div className="mt-2 flex w-full flex-nowrap items-center justify-center gap-4">
               <button
                 type="button"
                 onClick={onPrevStation}
@@ -468,46 +507,6 @@ export function PlayerScreen({
               />
             </div>
 
-            {/* Фиксированный контейнер для trackTitle - предотвращает CLS */}
-            <div className="mt-2 w-full max-w-2xl sm:mt-4" style={{ minHeight: '32px', height: '32px' }}>
-              {trackTitle?.trim() && (
-                <button
-                  type="button"
-                  onClick={handleCopy}
-                  disabled={!canCopy}
-                  className={`relative w-full rounded-2xl border-2 border-neon bg-black/40 px-4 py-2 text-center backdrop-blur-md transition-transform will-change-transform sm:py-3 ${
-                    canCopy ? "hover:scale-105 active:scale-95" : "cursor-default opacity-80"
-                  }`}
-                  aria-label={trackLine}
-                >
-                  <div className={shouldTrackMarquee ? "marquee" : ""}>
-                    <p
-                      className={`text-[8px] uppercase tracking-[0.24em] text-neon-bright sm:text-[9px] sm:tracking-[0.32em] ${
-                        shouldTrackMarquee ? "marquee-track" : ""
-                      }`}
-                      style={trackStyle}
-                    >
-                      {trackLine}
-                      {shouldTrackMarquee ? ` • ${trackLine}` : ""}
-                    </p>
-                  </div>
-                  <AnimatePresence>
-                    {copied && (
-                      <motion.span
-                        initial={{ opacity: 0, y: 6, scale: 0.9 }}
-                        animate={{ opacity: 1, y: 0, scale: 1 }}
-                        exit={{ opacity: 0, y: -6, scale: 0.95 }}
-                        transition={{ duration: 0.2 }}
-                        className="pointer-events-none absolute right-3 top-2 text-[8px] uppercase tracking-[0.3em] text-neon-bright"
-                      >
-                        {labels.copied}
-                      </motion.span>
-                    )}
-                  </AnimatePresence>
-                </button>
-              )}
-            </div>
-
             <button
               type="button"
               onClick={onStop}
@@ -519,28 +518,9 @@ export function PlayerScreen({
               {labels.stop}
             </button>
 
-            {/* Фиксированный контейнер для статусов - предотвращает CLS */}
-            <div className="w-full" style={{ minHeight: '48px', height: '48px' }}>
-              <div className="flex flex-col justify-center h-full">
-                {statusText && (
-                  <p className="text-[8px] uppercase tracking-[0.25em] text-neon/70 sm:text-[10px] sm:tracking-[0.3em]">
-                    {statusText}
-                  </p>
-                )}
-                {statusDetail && (
-                  <div className={shouldStatusMarquee ? "marquee" : ""}>
-                    <p
-                      className={`text-[7px] uppercase tracking-[0.25em] text-neon/50 sm:text-[9px] sm:tracking-[0.3em] ${
-                        shouldStatusMarquee ? "marquee-track" : ""
-                      }`}
-                      style={statusStyle}
-                    >
-                      {statusDetail}
-                    </p>
-                  </div>
-                )}
-              </div>
-            </div>
+            {/* Ранее здесь отображались статусные строки (НАСТРОЙКА ВОЛНЫ / СИГНАЛ ЗАФИКСИРОВАН).
+                Сейчас блок намеренно пустой, чтобы эти сообщения не появлялись в плеере. */}
+            <div className="w-full" style={{ minHeight: '48px', height: '48px' }} />
           </div>
 
           {isPlaying && (

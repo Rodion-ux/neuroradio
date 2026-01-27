@@ -22,6 +22,9 @@ type IdleScreenProps = {
   labels: IdleScreenLabels;
   lang: "RU" | "EN";
   onSetLang: (lang: "RU" | "EN") => void;
+  onGenreClick?: (genre: string) => void;
+  isLoadingMixes?: boolean;
+  loadingStartLabel?: string;
   favorites?: Array<{
     changeuuid: string;
     name: string;
@@ -80,6 +83,9 @@ export function IdleScreen({
   labels,
   lang,
   onSetLang,
+  onGenreClick,
+  isLoadingMixes,
+  loadingStartLabel,
   favorites,
   onPlayFavorite,
   onRemoveFavorite,
@@ -177,7 +183,9 @@ export function IdleScreen({
               type="submit"
               className="pixel-button mt-1 w-full max-w-[220px] rounded-2xl border-2 border-neon bg-black/40 px-5 py-3 text-[9px] uppercase tracking-[0.32em] text-neon backdrop-blur-md transition hover:bg-neon hover:text-[#2d1b2e] hover:scale-105 active:scale-95 will-change-transform sm:mt-2 sm:max-w-[240px] sm:px-7 sm:py-4 sm:text-xs sm:tracking-[0.35em]"
             >
-              {labels.startButton}
+              {isLoadingMixes && loadingStartLabel
+                ? loadingStartLabel
+                : labels.startButton}
             </button>
           </form>
 
@@ -193,7 +201,7 @@ export function IdleScreen({
                   <button
                     key={tag}
                     type="button"
-                    onClick={() => onStart(tag, tag)}
+                    onClick={() => onGenreClick && onGenreClick(tag)}
                     className="pixel-tag relative shrink-0 rounded-2xl px-3 py-2 text-[9px] uppercase tracking-[0.25em] text-neon transition hover:z-50 hover:bg-neon hover:text-[#2d1b2e] hover:scale-105 active:scale-95 will-change-transform sm:px-4 sm:py-3 sm:text-[10px]"
                   >
                     {tag}
