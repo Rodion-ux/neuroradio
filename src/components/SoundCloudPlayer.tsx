@@ -63,7 +63,7 @@ export const SoundCloudPlayer = forwardRef<SoundCloudPlayerHandle, SoundCloudPla
     const initializeWidget = () => {
       if (!iframeRef.current) return;
       if (widgetRef.current) return;
-      if (typeof window === "undefined" || !window.SC || !window.SC.Widget) return;
+      if (typeof window === "undefined" || !window.SC || typeof window.SC.Widget !== 'function') return;
 
       const widget = window.SC.Widget(iframeRef.current);
       widgetRef.current = widget;
@@ -73,39 +73,9 @@ export const SoundCloudPlayer = forwardRef<SoundCloudPlayerHandle, SoundCloudPla
         widget.getDuration((ms) => {
           durationRef.current = ms;
         });
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/574a7f99-6c21-48ad-9731-30948465c78f',{
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({
-            sessionId:'debug-session',
-            runId:'pre-fix',
-            hypothesisId:'H6',
-            location:'SoundCloudPlayer.tsx:READY',
-            message:'SoundCloud widget READY',
-            data:{ trackIdProp: trackId ?? null },
-            timestamp:Date.now()
-          })
-        }).catch(()=>{});
-        // #endregion agent log
       };
 
       const handleFinish = () => {
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/574a7f99-6c21-48ad-9731-30948465c78f',{
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({
-            sessionId:'debug-session',
-            runId:'pre-fix',
-            hypothesisId:'H1',
-            location:'SoundCloudPlayer.tsx:FINISH',
-            message:'SoundCloud widget FINISH event',
-            data:{ currentTrackIdProp: trackId ?? null },
-            timestamp:Date.now()
-          })
-        }).catch(()=>{});
-        // #endregion agent log
         if (finishHandlerRef.current) {
           finishHandlerRef.current();
         }
@@ -132,22 +102,7 @@ export const SoundCloudPlayer = forwardRef<SoundCloudPlayerHandle, SoundCloudPla
       if (typeof window === "undefined") return;
 
       // Если SDK уже есть (например, его добавили статически), просто инициализируем виджет.
-      if (window.SC && window.SC.Widget) {
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/574a7f99-6c21-48ad-9731-30948465c78f',{
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({
-            sessionId:'debug-session',
-            runId:'pre-fix',
-            hypothesisId:'H6',
-            location:'SoundCloudPlayer.tsx:SDK_ALREADY_PRESENT',
-            message:'SoundCloud SDK already present on mount',
-            data:{},
-            timestamp:Date.now()
-          })
-        }).catch(()=>{});
-        // #endregion agent log
+      if (window.SC && typeof window.SC.Widget === 'function') {
         initializeWidget();
         return;
       }
@@ -158,21 +113,6 @@ export const SoundCloudPlayer = forwardRef<SoundCloudPlayerHandle, SoundCloudPla
       document.body.appendChild(script);
 
       const onLoad = () => {
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/574a7f99-6c21-48ad-9731-30948465c78f',{
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({
-            sessionId:'debug-session',
-            runId:'pre-fix',
-            hypothesisId:'H6',
-            location:'SoundCloudPlayer.tsx:SDK_LOAD',
-            message:'SoundCloud SDK script loaded',
-            data:{},
-            timestamp:Date.now()
-          })
-        }).catch(()=>{});
-        // #endregion agent log
         // Инициализируем виджет после загрузки SDK, если iframe уже есть.
         initializeWidget();
       };
@@ -202,38 +142,8 @@ export const SoundCloudPlayer = forwardRef<SoundCloudPlayerHandle, SoundCloudPla
         loadTrack: (id: number, autoPlay = true) => {
           const widget = widgetRef.current;
           if (!widget) {
-            // #region agent log
-            fetch('http://127.0.0.1:7242/ingest/574a7f99-6c21-48ad-9731-30948465c78f',{
-              method:'POST',
-              headers:{'Content-Type':'application/json'},
-              body:JSON.stringify({
-                sessionId:'debug-session',
-                runId:'pre-fix',
-                hypothesisId:'H2',
-                location:'SoundCloudPlayer.tsx:loadTrack[no-widget]',
-                message:'loadTrack called before widget init',
-                data:{ id, autoPlay },
-                timestamp:Date.now()
-              })
-            }).catch(()=>{});
-            // #endregion agent log
             return;
           }
-          // #region agent log
-          fetch('http://127.0.0.1:7242/ingest/574a7f99-6c21-48ad-9731-30948465c78f',{
-            method:'POST',
-            headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({
-              sessionId:'debug-session',
-              runId:'pre-fix',
-              hypothesisId:'H2',
-              location:'SoundCloudPlayer.tsx:loadTrack',
-              message:'loadTrack called',
-              data:{ id, autoPlay },
-              timestamp:Date.now()
-            })
-          }).catch(()=>{});
-          // #endregion agent log
           const url = `https://api.soundcloud.com/tracks/${id}`;
           widget.load(url, {
             auto_play: autoPlay,
@@ -261,25 +171,6 @@ export const SoundCloudPlayer = forwardRef<SoundCloudPlayerHandle, SoundCloudPla
 
     // Если в пропах пришёл trackId, инициализируем его после готовности виджета.
     useEffect(() => {
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/574a7f99-6c21-48ad-9731-30948465c78f',{
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({
-          sessionId:'debug-session',
-          runId:'pre-fix',
-          hypothesisId:'H7',
-          location:'SoundCloudPlayer.tsx:effect[ready,trackId]',
-          message:'Effect fired for ready/trackId',
-          data:{
-            ready,
-            trackId: trackId ?? null,
-            hasWidget: !!widgetRef.current
-          },
-          timestamp:Date.now()
-        })
-      }).catch(()=>{});
-      // #endregion agent log
       if (!ready) return;
       if (!trackId) return;
       const widget = widgetRef.current;
