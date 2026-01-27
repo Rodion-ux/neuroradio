@@ -211,10 +211,6 @@ const translations = {
     RU: "ЖАНР",
     EN: "GENRE",
   },
-  liveStream: {
-    RU: "ПРЯМОЙ ЭФИР",
-    EN: "LIVE STREAM",
-  },
   stopButton: {
     RU: "СТОП",
     EN: "STOP",
