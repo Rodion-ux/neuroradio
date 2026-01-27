@@ -2568,7 +2568,6 @@ export default function Home() {
           labels={{
             nowPlaying: t("nowPlaying"),
             genre: t("genre"),
-            liveStream: t("liveStream"),
             stop: t("stopButton"),
             trackFallback: t("trackFallback"),
             copied: t("copied"),
