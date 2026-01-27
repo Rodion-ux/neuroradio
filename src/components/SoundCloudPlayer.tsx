@@ -53,10 +53,10 @@ export const SoundCloudPlayer = forwardRef<SoundCloudPlayerHandle, SoundCloudPla
     const iframeRef = useRef<HTMLIFrameElement | null>(null);
     const widgetRef = useRef<SoundCloudWidget | null>(null);
     const [ready, setReady] = useState(false);
-    const finishHandlerRef = useRef<() => void>();
+    const finishHandlerRef = useRef<(() => void) | undefined>(undefined);
     const progressHandlerRef = useRef<
       ((positionMs: number, durationMs: number) => void) | undefined
-    >();
+    >(undefined);
     const durationRef = useRef(0);
 
     const initializeWidget = () => {
