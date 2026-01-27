@@ -1,5 +1,6 @@
 import { RadioBrowserApi } from "radio-browser-api";
 import { NextRequest, NextResponse } from "next/server";
+import Replicate from "replicate";
 
 export const runtime = "nodejs";
 
@@ -15,6 +16,7 @@ type Station = {
 };
 
 const radioBrowser = new RadioBrowserApi("Neuro Radio", true);
+const replicate = new Replicate({ auth: process.env.REPLICATE_API_TOKEN });
 
 const ensureBaseUrl = async () => {
   if (!radioBrowser.getBaseUrl()) {
@@ -76,10 +78,13 @@ const normalizeStations = (stations: Station[], requestedTag?: string) => {
   const filtered = stations.filter((station) => {
     const url = station.urlResolved || station.url;
     if (!url) return false;
-    // Строгая проверка: только HTTPS, HTTP должен быть отфильтрован
+    
+    // СТРОГИЙ HTTPS: Полностью исключаем HTTP ссылки
+    // Проверяем несколько раз для надежности
+    const urlLower = url.trim().toLowerCase();
+    if (!urlLower.startsWith("https://")) return false;
+    if (urlLower.startsWith("http://")) return false; // Дополнительная проверка
     if (!isHttpsUrl(url)) return false;
-    // Дополнительная проверка: убеждаемся, что URL действительно начинается с https://
-    if (!url.trim().toLowerCase().startsWith("https://")) return false;
     
     // Проверка релевантности жанру (если передан requestedTag)
     if (requestedTag && !isStationRelevant(station, requestedTag)) {
@@ -89,7 +94,7 @@ const normalizeStations = (stations: Station[], requestedTag?: string) => {
     return true;
   });
 
-  console.log(`Found ${filtered.length} stations after HTTPS and relevance filter (requested: ${requestedTag || "any"})`);
+  console.log(`Found ${filtered.length} stations after strict HTTPS and relevance filter (requested: ${requestedTag || "any"})`);
 
   const withFormat = filtered.map((station) => ({
     station,
@@ -107,10 +112,165 @@ const normalizeStations = (stations: Station[], requestedTag?: string) => {
     id: station.id,
     name: station.name,
     urlResolved: station.urlResolved || station.url || "",
-    tags: station.tags,
+    tags: Array.isArray(station.tags) ? station.tags : [],
     favicon: station.favicon,
     country: station.country,
   }));
+};
+
+const AI_STOP_TAGS = ["talk", "news", "pop"];
+
+const hasBlockedTags = (station: ReturnType<typeof normalizeStations>[number]) => {
+  const tagText = [...(station.tags || []), station.name || ""].join(" ").toLowerCase();
+  return AI_STOP_TAGS.some((stopTag) => tagText.includes(stopTag));
+};
+
+const collectAiCandidates = async (
+  tag: string,
+  useRandomOrder = false,
+  limit = 30
+): Promise<ReturnType<typeof normalizeStations>> => {
+  const normalizedTag = normalizeTagForSearch(tag);
+  const tagVariants = normalizedTag.split(",").map(t => t.trim()).filter(Boolean);
+  const collected: ReturnType<typeof normalizeStations> = [];
+  const seen = new Set<string>();
+  const orderType = useRandomOrder ? "random" : "clickCount";
+
+  for (const searchTag of tagVariants) {
+    if (collected.length >= limit) break;
+    const stations = await withRetry(() => {
+      const query = {
+        tag: searchTag,
+        limit,
+        order: orderType as any,
+        reverse: false,
+        hideBroken: false,
+        lastcheckok: 1,
+      };
+      return radioBrowser.searchStations(query as any);
+    });
+
+    const normalized = normalizeStations(stations as Station[], searchTag);
+    for (const station of normalized) {
+      if (collected.length >= limit) break;
+      if (!station.id || seen.has(station.id)) continue;
+      if (hasBlockedTags(station)) continue;
+      seen.add(station.id);
+      collected.push(station);
+    }
+  }
+
+  const result = collected.slice(0, limit);
+  return result;
+};
+
+const getAiPreferredIds = async (
+  stations: ReturnType<typeof normalizeStations>,
+  selectedGenre: string
+): Promise<{ ids: string[]; usedAi: boolean }> => {
+  const fallbackIds = stations
+    .map((station) => station.id)
+    .filter(Boolean)
+    .slice(0, 5);
+
+  if (!process.env.REPLICATE_API_TOKEN) {
+    console.warn("REPLICATE_API_TOKEN not configured, skipping AI validation");
+    return { ids: fallbackIds, usedAi: false };
+  }
+
+  const stationList = stations
+    .map((station) => `- id: ${station.id} | name: ${station.name} | tags: ${(station.tags || []).join(", ") || "none"}`)
+    .join("\n");
+
+  const prompt = `Отбери только те станции, которые строго соответствуют жанру "${selectedGenre}". Игнорируй станции с тегами "talk", "news", "pop". Верни JSON с 5 лучшими ID.\n\nФормат ответа: { "ids": ["id1", "id2", "id3", "id4", "id5"] }\n\nСтанции:\n${stationList}\n\nВерни только JSON, без дополнительного текста.`;
+
+  try {
+    // Используем Replicate с моделью openai/gpt-4.1-mini
+    const input = {
+      system_prompt:
+        "Return JSON only. Select 5 station IDs that best match the genre. Ignore stations with tags 'talk', 'news', 'pop'.",
+      prompt: prompt,
+    };
+
+    const output = await replicate.run("openai/gpt-4.1-mini", { input });
+
+    // Собираем ответ (обычно приходит массив строк или строка)
+    let rawResponse = "";
+    if (Array.isArray(output)) {
+      rawResponse = output.join("").trim();
+    } else {
+      rawResponse = String(output).trim();
+    }
+
+    const jsonMatch = rawResponse.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      return { ids: fallbackIds, usedAi: false };
+    }
+
+    const parsed = JSON.parse(jsonMatch[0]);
+    if (!Array.isArray(parsed.ids)) {
+      return { ids: fallbackIds, usedAi: false };
+    }
+
+    const ids = parsed.ids.map((id: string) => String(id)).filter(Boolean);
+
+    return ids.length
+      ? { ids: ids.slice(0, 5), usedAi: true }
+      : { ids: fallbackIds, usedAi: false };
+  } catch (error) {
+    console.warn("AI validation failed, using fallback IDs:", error);
+    return { ids: fallbackIds, usedAi: false };
+  }
+};
+
+// (старое определение getAiPreferredIds было заменено новой версией выше)
+
+const headLatency = async (url: string, timeoutMs = 400): Promise<number | null> => {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const start = Date.now();
+
+  try {
+    const response = await fetch(url, {
+      method: "HEAD",
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "Mozilla/5.0 (compatible; NeuroRadio/1.0)",
+      },
+    });
+
+    clearTimeout(timeoutId);
+    const ok =
+      response.ok ||
+      response.status === 206 ||
+      response.status === 301 ||
+      response.status === 302;
+
+    return ok ? Date.now() - start : null;
+  } catch {
+    clearTimeout(timeoutId);
+    return null;
+  }
+};
+
+const pickFastestStation = async (
+  stations: ReturnType<typeof normalizeStations>,
+  timeoutMs = 1000
+): Promise<ReturnType<typeof normalizeStations>[number] | null> => {
+  if (!stations.length) return null;
+
+  const results = await Promise.all(
+    stations.map(async (station) => {
+      const latency = await headLatency(station.urlResolved, timeoutMs);
+      return latency !== null ? { station, latency } : null;
+    })
+  );
+
+  const valid = results.filter(Boolean) as Array<{ station: ReturnType<typeof normalizeStations>[number]; latency: number }>;
+  if (!valid.length) return null;
+
+  valid.sort((a, b) => a.latency - b.latency);
+  return valid[0].station;
 };
 
 /**
@@ -170,35 +330,96 @@ const filterAvailableStations = async (
   maxChecks = 20
 ): Promise<ReturnType<typeof normalizeStations>> => {
   if (!stations.length) return [];
-  
+
+  const startedAt = Date.now();
+
   // Check up to maxChecks stations in parallel
   const stationsToCheck = stations.slice(0, maxChecks);
   const availabilityChecks = await Promise.allSettled(
-    stationsToCheck.map(station => 
-      checkStationAvailability(station.urlResolved).then(available => ({
+    stationsToCheck.map((station) =>
+      checkStationAvailability(station.urlResolved).then((available) => ({
         station,
         available,
       }))
     )
   );
-  
+
   const availableStations: ReturnType<typeof normalizeStations> = [];
-  
+
   for (const result of availabilityChecks) {
-    if (result.status === 'fulfilled' && result.value.available) {
+    if (result.status === "fulfilled" && result.value.available) {
       availableStations.push(result.value.station);
     }
   }
-  
+
+  const durationMs = Date.now() - startedAt;
+
   console.info(
-    `Checked ${stationsToCheck.length} stations, found ${availableStations.length} available`
+    `Checked ${stationsToCheck.length} stations, found ${availableStations.length} available in ${durationMs}ms`
   );
-  
+
   // Return only available stations
   return availableStations;
 };
 
 class NoStationsError extends Error {}
+
+export async function GET(request: NextRequest) {
+  try {
+    await ensureBaseUrl();
+    const { searchParams } = new URL(request.url);
+    const rawTag = searchParams.get("tag")?.trim() ?? "";
+    const displayTag = rawTag.length ? rawTag.toLowerCase() : "lofi";
+    const useRandomOrder =
+      searchParams.get("random") === "1" || searchParams.get("random") === "true";
+
+    console.info("AI stations requested for tag:", displayTag, "| randomOrder:", useRandomOrder);
+
+    const candidates = await collectAiCandidates(displayTag, useRandomOrder);
+    if (!candidates.length) {
+      throw new NoStationsError(`No HTTPS stations available for tag "${displayTag}"`);
+    }
+
+    const { ids: aiIds, usedAi } = await getAiPreferredIds(candidates, displayTag);
+    const aiStations = aiIds
+      .map((id) => candidates.find((station) => station.id === id))
+      .filter(Boolean) as ReturnType<typeof normalizeStations>;
+
+    const fastest = await pickFastestStation(aiStations, 1000);
+    const selected = fastest ?? aiStations[0] ?? candidates[0];
+
+    if (!selected) {
+      throw new NoStationsError(`No AI-validated stations available for tag "${displayTag}"`);
+    }
+
+    return NextResponse.json(
+      {
+        tag: displayTag,
+        stations: [selected],
+        aiValidated: usedAi && aiStations.length > 0,
+      },
+      {
+        headers: {
+          "Cache-Control": "no-store, max-age=0",
+          "Pragma": "no-cache",
+          "Expires": "0",
+        },
+      }
+    );
+  } catch (error) {
+    console.error("AI RADIO API ERROR:", error);
+    if (error instanceof NoStationsError) {
+      return NextResponse.json(
+        { error: error.message },
+        { status: 404 }
+      );
+    }
+    return NextResponse.json(
+      { error: "Failed to fetch AI-validated station" },
+      { status: 500 }
+    );
+  }
+}
 
 export async function POST(request: NextRequest) {
   let body: { tag?: string; useRandomOrder?: boolean } = {};
@@ -222,7 +443,9 @@ export async function POST(request: NextRequest) {
       "| randomOrder:",
       useRandomOrder
     );
-    const stations = await fetchSecureStationsForTag(displayTag, useRandomOrder);
+    const stations = await fetchSecureStationsForTag(displayTag, useRandomOrder, {
+      skipAvailability: true,
+    });
     
     // Запрещаем кеширование
     return NextResponse.json(
@@ -400,7 +623,11 @@ const getFallbackTag = (tag: string): string | null => {
   return fallbackMap[tag.toLowerCase()] || null;
 };
 
-const fetchSecureStationsForTag = async (tag: string, useRandomOrder = false) => {
+const fetchSecureStationsForTag = async (
+  tag: string,
+  useRandomOrder = false,
+  options?: { skipAvailability?: boolean }
+) => {
   // Normalize tag for search (e.g., "dnb" -> "drum and bass, jungle, neurofunk")
   const normalizedTag = normalizeTagForSearch(tag);
   
@@ -411,6 +638,8 @@ const fetchSecureStationsForTag = async (tag: string, useRandomOrder = false) =>
   // Используем useRandomOrder для выбора порядка сортировки
   const orderType = useRandomOrder ? "random" : "clickCount";
   
+  const searchStartedAt = Date.now();
+
   for (const searchTag of tagVariants) {
     const stations = await withRetry(() => {
       const query = {
@@ -431,18 +660,25 @@ const fetchSecureStationsForTag = async (tag: string, useRandomOrder = false) =>
     }
   }
   
+  const searchDurationMs = Date.now() - searchStartedAt;
+
   if (allSecureStations.length) {
-    // Filter to only available stations
-    const availableStations = await filterAvailableStations(allSecureStations, 20);
+    const skipAvailability = options?.skipAvailability === true;
+
+    // Для быстрого пути (POST /api/generate) мы можем пропустить дорогую
+    // проверку доступности и положиться на фронтендовый авто-скип и
+    // черный список. Для других случаев оставляем полную проверку.
+    const baseStations = skipAvailability
+      ? allSecureStations
+      : await filterAvailableStations(allSecureStations, 20);
     
-    if (availableStations.length === 0) {
-      // If no stations are available, try fallback
-      console.warn(`No available stations found for tag "${tag}", trying fallback`);
+    if (!baseStations.length) {
+      console.warn(`No available stations found for tag "${tag}"`);
       throw new NoStationsError(`No available stations for tag "${tag}"`);
     }
     
     // Shuffle array using Fisher-Yates algorithm
-    const shuffled = [...availableStations];
+    const shuffled = [...baseStations];
     for (let i = shuffled.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
@@ -453,7 +689,9 @@ const fetchSecureStationsForTag = async (tag: string, useRandomOrder = false) =>
       console.info(`Selected station: "${shuffled[0].name}" (${shuffled[0].urlResolved}) for tag "${tag}"`);
     }
     
-    console.info(`Found ${availableStations.length} available stations (from ${allSecureStations.length} total), returning shuffled array (original: ${tag})`);
+    console.info(
+      `Found ${baseStations.length} ${skipAvailability ? "raw" : "available"} stations (from ${allSecureStations.length} total), returning shuffled array (original: ${tag})`
+    );
     return shuffled;
   }
 

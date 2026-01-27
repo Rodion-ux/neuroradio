@@ -104,6 +104,10 @@ const translations = {
     RU: "НАСТРОЙКА ВОЛНЫ...",
     EN: "TUNING FREQUENCY...",
   },
+  statusAiValidating: {
+    RU: "НЕЙРОСЕТЬ ПРОВЕРЯЕТ ЭФИР...",
+    EN: "AI VALIDATING AIRWAVES...",
+  },
   statusPlaying: {
     RU: "ИГРАЕТ",
     EN: "PLAYING",
@@ -271,6 +275,9 @@ export default function Home() {
   const preloadInProgressRef = useRef(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const isLoadingRef = useRef(false);
+  const staticContextRef = useRef<AudioContext | null>(null);
+  const staticSourceRef = useRef<AudioBufferSourceNode | null>(null);
+  const isStaticPlayingRef = useRef(false);
   const audioEventHandlersRef = useRef<{
     handlePlay?: () => void;
     handlePause?: () => void;
@@ -282,6 +289,54 @@ export default function Home() {
   }>({});
 
   const isMuted = volume === 0;
+
+  const startStaticNoise = async () => {
+    if (isStaticPlayingRef.current) return;
+    try {
+      const context =
+        staticContextRef.current && staticContextRef.current.state !== "closed"
+          ? staticContextRef.current
+          : new AudioContext();
+      staticContextRef.current = context;
+
+      const durationSeconds = 2;
+      const sampleRate = context.sampleRate;
+      const frameCount = sampleRate * durationSeconds;
+      const buffer = context.createBuffer(1, frameCount, sampleRate);
+      const data = buffer.getChannelData(0);
+
+      for (let i = 0; i < frameCount; i++) {
+        data[i] = (Math.random() * 2 - 1) * 0.35;
+      }
+
+      const source = context.createBufferSource();
+      source.buffer = buffer;
+      source.loop = true;
+      source.connect(context.destination);
+      source.start();
+
+      staticSourceRef.current = source;
+      isStaticPlayingRef.current = true;
+    } catch {
+      // Вспомогательный эффект, можно тихо игнорировать ошибки
+    }
+  };
+
+  const stopStaticNoise = () => {
+    if (staticSourceRef.current) {
+      try {
+        staticSourceRef.current.stop();
+        staticSourceRef.current.disconnect();
+      } catch {
+        // ignore
+      }
+      staticSourceRef.current = null;
+    }
+    if (staticContextRef.current && staticContextRef.current.state === "running") {
+      staticContextRef.current.suspend().catch(() => {});
+    }
+    isStaticPlayingRef.current = false;
+  };
 
   // Функции для работы с кэшем станций в localStorage
   const CACHE_KEY_PREFIX = "neuro_radio_cache_";
@@ -347,8 +402,13 @@ export default function Home() {
     }
   };
 
-  const saveVerifiedStation = (station: Station, genre: string) => {
+  const saveVerifiedStation = (
+    station: Station,
+    genre: string,
+    options?: { showFeedback?: boolean }
+  ) => {
     try {
+      const showFeedback = options?.showFeedback !== false;
       const cached = localStorage.getItem(VERIFIED_STATIONS_KEY);
       const allVerified: Record<string, Station[]> = cached ? JSON.parse(cached) : {};
       const genreKey = genre.toLowerCase();
@@ -365,19 +425,20 @@ export default function Home() {
       
       localStorage.setItem(VERIFIED_STATIONS_KEY, JSON.stringify(allVerified));
       console.log(`Verified station "${station.name}" saved for genre "${genre}"`);
-      
-      // Показываем визуальный фидбек
-      setStatusText(t("stationAddedToCollection"));
-      // Очищаем сообщение через 3 секунды
-      setTimeout(() => {
-        setStatusText((prev) => {
-          // Очищаем только если это все еще наше сообщение
-          if (prev === t("stationAddedToCollection")) {
-            return undefined;
-          }
-          return prev;
-        });
-      }, 3000);
+      if (showFeedback) {
+        // Показываем визуальный фидбек
+        setStatusText(t("stationAddedToCollection"));
+        // Очищаем сообщение через 3 секунды
+        setTimeout(() => {
+          setStatusText((prev) => {
+            // Очищаем только если это все еще наше сообщение
+            if (prev === t("stationAddedToCollection")) {
+              return undefined;
+            }
+            return prev;
+          });
+        }, 3000);
+      }
     } catch (error) {
       console.warn("Failed to save verified station:", error);
     }
@@ -404,6 +465,79 @@ export default function Home() {
     const verified = getVerifiedStations(genre);
     // Фильтруем станции, которые еще не были проиграны в текущей сессии
     return verified.filter(s => !playedInSessionRef.current.has(s.urlResolved));
+  };
+
+  // Функции для работы с черным списком станций
+  const BLACKLIST_KEY = "neuro_radio_blacklist";
+  const stationPlayStartTimeRef = useRef<number | null>(null); // Время начала воспроизведения текущей станции
+  const blacklistAdditionsRef = useRef<Array<{ name: string; tags: string[]; genre: string }>>([]); // Для AI-анализа
+
+  const getBlacklist = (): Set<string> => {
+    try {
+      const cached = localStorage.getItem(BLACKLIST_KEY);
+      if (!cached) return new Set();
+      const ids = JSON.parse(cached) as string[];
+      return new Set(Array.isArray(ids) ? ids : []);
+    } catch (error) {
+      console.warn("Failed to read blacklist:", error);
+      return new Set();
+    }
+  };
+
+  const addToBlacklist = (station: Station, genre: string) => {
+    try {
+      const blacklist = getBlacklist();
+      if (station.id && !blacklist.has(station.id)) {
+        blacklist.add(station.id);
+        localStorage.setItem(BLACKLIST_KEY, JSON.stringify(Array.from(blacklist)));
+        console.log(`Station "${station.name}" added to blacklist`);
+        
+        // Сохраняем данные для AI-анализа (раз в 10 добавлений)
+        blacklistAdditionsRef.current.push({
+          name: station.name,
+          tags: station.tags || [],
+          genre: genre,
+        });
+        
+        // Если накопилось 10 добавлений, отправляем на AI-анализ
+        if (blacklistAdditionsRef.current.length >= 10) {
+          void analyzeBlacklistWithAI(blacklistAdditionsRef.current, genre);
+          blacklistAdditionsRef.current = []; // Очищаем после отправки
+        }
+      }
+    } catch (error) {
+      console.warn("Failed to add station to blacklist:", error);
+    }
+  };
+
+  const filterBlacklistedStations = (stations: Station[]): Station[] => {
+    const blacklist = getBlacklist();
+    return stations.filter(s => !blacklist.has(s.id));
+  };
+
+  // AI-анализ черного списка через OpenAI
+  const analyzeBlacklistWithAI = async (blacklistedStations: Array<{ name: string; tags: string[]; genre: string }>, genre: string) => {
+    try {
+      const response = await fetch("/api/analyze-blacklist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          stations: blacklistedStations,
+          genre: genre,
+        }),
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        if (data.stopWords && Array.isArray(data.stopWords)) {
+          console.log(`AI suggested stop words for genre "${genre}":`, data.stopWords);
+          // Сохраняем стоп-слова для использования в будущих запросах
+          // Это можно использовать для обновления TAG_MAPPINGS на бэкенде
+        }
+      }
+    } catch (error) {
+      console.warn("Failed to analyze blacklist with AI:", error);
+    }
   };
 
   const t = (key: TranslationKey) => translations[key][lang];
@@ -545,6 +679,28 @@ export default function Home() {
   }, [isConnecting]);
 
   const handleStreamError = async (reason?: string) => {
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/574a7f99-6c21-48ad-9731-30948465c78f',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        sessionId:'debug-session',
+        runId:'run-next',
+        hypothesisId:'HN3',
+        location:'page.tsx:handleStreamError:entry',
+        message:'handleStreamError called',
+        data:{
+          reason: reason ?? null,
+          failedCount: failedCountRef.current
+        },
+        timestamp:Date.now()
+      })
+    }).catch(()=>{});
+    // #endregion
+
+    // Включаем "шум поиска", если поток отвалился и мы будем искать следующую станцию
+    void startStaticNoise();
+
     // НЕ блокируем если уже идет переключение - это нормально при автоматическом skip
     // Блокируем только если это повторный вызов для той же ошибки
     if (isSwitchingRef.current && failedCountRef.current > 0) {
@@ -563,9 +719,10 @@ export default function Home() {
     isSwitchingRef.current = true;
     failedCountRef.current += 1;
     
-    // Удаляем нерабочую станцию из кэша и verifiedStations
+    // АВТО-БАН: Добавляем нерабочую станцию в черный список
     const currentStation = stationsRef.current[stationIndexRef.current];
     if (currentStation && activeTagRef.current) {
+      addToBlacklist(currentStation, activeTagRef.current);
       removeStationFromCache(currentStation.urlResolved, activeTagRef.current);
       removeVerifiedStation(currentStation.urlResolved, activeTagRef.current);
     }
@@ -596,7 +753,8 @@ export default function Home() {
       // This guarantees a fresh random station on each error
       const { stations: refreshed } = await fetchStations(
         activeTagRef.current ?? "lofi",
-        true // useRandomOrder = true for random selection
+        true,
+        { showStatus: true }
       );
       
       if (!refreshed.length) {
@@ -705,6 +863,7 @@ export default function Home() {
     }
 
     const handlePlay = () => {
+      stopStaticNoise();
       setPlaybackState("playing");
       setStatusText(undefined);
       setStatusDetail(undefined);
@@ -731,9 +890,10 @@ export default function Home() {
           src: audio.src,
         });
         
-        // Удаляем нерабочую станцию из verifiedStations
+        // АВТО-БАН: Добавляем станцию в черный список при ошибке
         const currentStation = stationsRef.current[stationIndexRef.current];
         if (currentStation && activeTagRef.current) {
+          addToBlacklist(currentStation, activeTagRef.current);
           removeVerifiedStation(currentStation.urlResolved, activeTagRef.current);
         }
         
@@ -760,9 +920,10 @@ export default function Home() {
       } else if (audio.networkState === 3) {
         // Если нет ошибки в audio.error, но networkState === 3, это тоже проблема
         console.log("networkState === 3 detected in error handler without audio.error");
-        // Удаляем нерабочую станцию из verifiedStations
+        // АВТО-БАН: Добавляем станцию в черный список
         const currentStation = stationsRef.current[stationIndexRef.current];
         if (currentStation && activeTagRef.current) {
+          addToBlacklist(currentStation, activeTagRef.current);
           removeVerifiedStation(currentStation.urlResolved, activeTagRef.current);
         }
         // Дополнительная проверка readyState
@@ -827,6 +988,27 @@ export default function Home() {
 
     const safeIndex = (index + list.length) % list.length;
     const station = list[safeIndex];
+
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/574a7f99-6c21-48ad-9731-30948465c78f',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        sessionId:'debug-session',
+        runId:'run-next',
+        hypothesisId:'HN2',
+        location:'page.tsx:startStationPlayback:entry',
+        message:'startStationPlayback called',
+        data:{
+          index,
+          safeIndex,
+          stationUrl: station?.urlResolved ?? null,
+          stationName: station?.name ?? null
+        },
+        timestamp:Date.now()
+      })
+    }).catch(()=>{});
+    // #endregion
     stationIndexRef.current = safeIndex;
     setStationIndex(safeIndex);
     setStationName(station.name || t("unknownStation"));
@@ -836,6 +1018,9 @@ export default function Home() {
     
     // Добавляем станцию в список проигранных в текущей сессии
     playedInSessionRef.current.add(station.urlResolved);
+    
+    // Запоминаем время начала воспроизведения для отслеживания быстрого переключения
+    stationPlayStartTimeRef.current = Date.now();
 
     // ПРИНУДИТЕЛЬНАЯ ОЧИСТКА: Очищаем старый audio элемент ПЕРЕД установкой нового URL
     if (audioRef.current) {
@@ -947,14 +1132,20 @@ export default function Home() {
     let hasPlaybackSignal = false;
     let timeoutCleared = false;
     
+    // ТАЙМАУТ ПОДКЛЮЧЕНИЯ: 3 секунды на ожидание ответа от потока
     const timeoutId = window.setTimeout(() => {
       if (!hasPlaybackSignal && !timeoutCleared) {
+        // АВТО-БАН: Если станция не начала играть за 3 секунды, баним её
+        const currentStation = stationsRef.current[stationIndexRef.current];
+        if (currentStation && activeTagRef.current) {
+          addToBlacklist(currentStation, activeTagRef.current);
+        }
         setStatusText(t("statusStationUnstable"));
         setStatusDetail(undefined);
         streamTimeoutRef.current = null;
         void handleStreamError("stream timeout");
       }
-    }, 10000); // Увеличено с 5 до 10 секунд
+    }, 3000); // Таймаут подключения: 3 секунды
     
     streamTimeoutRef.current = timeoutId;
     
@@ -1027,7 +1218,7 @@ export default function Home() {
           setTimeout(checkLoadStart, 100);
         }
       };
-      // Даем максимум 3 секунды на начало загрузки
+      // ТАЙМАУТ ПОДКЛЮЧЕНИЯ: Даем максимум 3 секунды на начало загрузки
       setTimeout(() => {
         if (!loadStarted) {
           loadStarted = true;
@@ -1054,12 +1245,17 @@ export default function Home() {
       return;
     }
     
-    // Если после ожидания networkState все еще 3 (NO_SOURCE), это означает, что формат не поддерживается
+    // ТАЙМАУТ ПОДКЛЮЧЕНИЯ: Если после ожидания networkState все еще 3 (NO_SOURCE), это означает, что формат не поддерживается
     if (audio.networkState === 3 && finalNetworkState === 3) {
       if (!timeoutCleared) {
         timeoutCleared = true;
         window.clearTimeout(timeoutId);
         streamTimeoutRef.current = null;
+      }
+      // АВТО-БАН: Добавляем станцию в черный список
+      const currentStation = stationsRef.current[stationIndexRef.current];
+      if (currentStation && activeTagRef.current) {
+        addToBlacklist(currentStation, activeTagRef.current);
       }
       void handleStreamError("no supported source");
       return;
@@ -1071,6 +1267,11 @@ export default function Home() {
         timeoutCleared = true;
         window.clearTimeout(timeoutId);
         streamTimeoutRef.current = null;
+      }
+      // АВТО-БАН: Добавляем станцию в черный список
+      const currentStation = stationsRef.current[stationIndexRef.current];
+      if (currentStation && activeTagRef.current) {
+        addToBlacklist(currentStation, activeTagRef.current);
       }
       const isNoSupportedSource = 
         audio.error.code === 4 || 
@@ -1085,6 +1286,11 @@ export default function Home() {
         timeoutCleared = true;
         window.clearTimeout(timeoutId);
         streamTimeoutRef.current = null;
+      }
+      // АВТО-БАН: Добавляем станцию в черный список
+      const currentStation = stationsRef.current[stationIndexRef.current];
+      if (currentStation && activeTagRef.current) {
+        addToBlacklist(currentStation, activeTagRef.current);
       }
       void handleStreamError("no supported source");
       return;
@@ -1149,7 +1355,21 @@ export default function Home() {
       // Start preloading next stations in background after successful playback
       void preloadNextStations();
     } catch (error) {
-      console.error("Audio play failed:", error);
+      // Специальная обработка AbortError: это нормальная ситуация,
+      // когда мы быстро переключаем станцию и вызываем pause() до завершения play().
+      const isAbortError =
+        error instanceof Error &&
+        (error.name === "AbortError" ||
+          error.message.toLowerCase().includes("the play() request was interrupted"));
+
+      if (isAbortError) {
+        // Не считаем это ошибкой потока, просто выходим без логики skip/бана
+        console.log("Audio play aborted due to quick pause/switch (AbortError)");
+        return;
+      }
+
+      // Для остальных ошибок логируем в консоль в мягком режиме
+      console.warn("Audio play failed:", error);
       console.log("Audio error details:", {
         error: audio.error?.code,
         message: audio.error?.message,
@@ -1178,6 +1398,13 @@ export default function Home() {
         exceptionMessage.includes("notsupportederror") ||
         (audio.networkState === 3 && audio.readyState === 0);
       
+      // АВТО-БАН: Добавляем станцию в черный список при любой ошибке после play()
+      const currentStation = stationsRef.current[stationIndexRef.current];
+      if (currentStation && activeTagRef.current) {
+        addToBlacklist(currentStation, activeTagRef.current);
+      }
+
+      // Логика skip для \"нет поддерживаемого источника\" и других реальных ошибок
       if (audio.error && audio.error.code > 1) {
         if (isNoSupportedSource) {
           console.log("No supported source detected after play(), switching station");
@@ -1200,7 +1427,11 @@ export default function Home() {
     }
   };
 
-  const fetchStations = async (tag: string, useRandomOrder = false) => {
+  const fetchStations = async (
+    tag: string,
+    useRandomOrder = false,
+    options?: { showStatus?: boolean; storeAiVerified?: boolean }
+  ) => {
     // Отменяем предыдущий запрос, если он еще выполняется
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
@@ -1214,17 +1445,46 @@ export default function Home() {
     // Добавляем timestamp для обхода кеша браузера
     const cacheBuster = Date.now() + Math.random();
     
-    const response = await fetch(`/api/generate?tag=${requestTag}&t=${cacheBuster}`, {
-      method: "POST",
-      body: JSON.stringify({ tag: requestTag, useRandomOrder }),
-      headers: { 
-        "Content-Type": "application/json",
-        "Cache-Control": "no-cache",
-        "Pragma": "no-cache",
-      },
-      cache: 'no-store',
-      signal: controller.signal,
-    });
+    if (options?.showStatus) {
+      setStatusText(t("statusAiValidating"));
+      setStatusDetail(undefined);
+    }
+
+    const useAi = options?.showStatus === true;
+
+    let response: Response;
+
+    if (useAi) {
+      // AI-валидатор + выбор самой быстрой станции
+      response = await fetch(
+        `/api/generate?tag=${encodeURIComponent(requestTag)}&t=${cacheBuster}&random=${useRandomOrder ? "1" : "0"}`,
+        {
+          method: "GET",
+          headers: {
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
+          },
+          cache: "no-store",
+          signal: controller.signal,
+        }
+      );
+    } else {
+      // Быстрый путь без AI: используем уже существующую POST-логику
+      response = await fetch(
+        `/api/generate?tag=${encodeURIComponent(requestTag)}&t=${cacheBuster}`,
+        {
+          method: "POST",
+          body: JSON.stringify({ tag: requestTag, useRandomOrder }),
+          headers: {
+            "Content-Type": "application/json",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
+          },
+          cache: "no-store",
+          signal: controller.signal,
+        }
+      );
+    }
 
     if (!response.ok) {
       const payload = await response.json().catch(() => null);
@@ -1232,9 +1492,39 @@ export default function Home() {
     }
 
     const data = await response.json();
+    const stations = (data.stations as Station[]) ?? [];
+    
+    // ФИЛЬТРАЦИЯ: Исключаем станции из черного списка
+    const filteredStations = filterBlacklistedStations(stations);
+    
+    if (filteredStations.length < stations.length) {
+      console.log(`Filtered out ${stations.length - filteredStations.length} blacklisted stations`);
+    }
+    
+    // Если после применения черного списка не осталось станций, но исходный
+    // список не пустой — не считаем это фатальной ошибкой, а временно
+    // ослабляем фильтрацию и используем оригинальный список, чтобы плеер
+    // не ломался полностью.
+    const effectiveStations =
+      filteredStations.length > 0 ? filteredStations : stations;
+
+    const shouldStoreAiVerified =
+      options?.storeAiVerified ?? options?.showStatus ?? false;
+    if (
+      data.aiValidated === true &&
+      filteredStations[0] &&
+      shouldStoreAiVerified
+    ) {
+      // В "Золотой фонд" добавляем только те станции, которые прошли и AI-валидацию,
+      // и не попали под черный список.
+      saveVerifiedStation(filteredStations[0], (data.tag as string) ?? tag, {
+        showFeedback: false,
+      });
+    }
+
     return {
       tag: (data.tag as string) ?? tag,
-      stations: (data.stations as Station[]) ?? [],
+      stations: effectiveStations,
     };
   };
 
@@ -1304,6 +1594,7 @@ export default function Home() {
     setAiReasoning("");
     failedCountRef.current = 0;
     activeStationUrlRef.current = null;
+    void startStaticNoise();
 
     const processed = isQuickTag ? null : processTextInput(userActivity);
     let initialTag = isQuickTag
@@ -1353,11 +1644,13 @@ export default function Home() {
 
     // ПРИОРИТЕТ 1: Проверяем "Золотой Фонд" (verifiedStations) перед запросом к API
     const unplayedVerified = getUnplayedVerifiedStations(initialTag);
-    if (unplayedVerified.length > 0) {
-      console.log(`Found ${unplayedVerified.length} unplayed verified stations in "Golden Fund" for genre "${initialTag}"`);
+    // Фильтруем verified станции через черный список
+    const verifiedFiltered = filterBlacklistedStations(unplayedVerified);
+    if (verifiedFiltered.length > 0) {
+      console.log(`Found ${verifiedFiltered.length} unplayed verified stations in "Golden Fund" for genre "${initialTag}" (${unplayedVerified.length - verifiedFiltered.length} filtered by blacklist)`);
       
       // Выбираем случайную станцию из "Золотого Фонда"
-      const randomVerified = unplayedVerified[Math.floor(Math.random() * unplayedVerified.length)];
+      const randomVerified = verifiedFiltered[Math.floor(Math.random() * verifiedFiltered.length)];
       
       // Создаем временный список станций с verified станцией
       const tempStationList = [randomVerified];
@@ -1404,11 +1697,13 @@ export default function Home() {
 
     // ПРИОРИТЕТ 2: Проверяем обычный кэш перед запросом к API
     const cachedStations = getCachedStations(initialTag);
-    if (cachedStations.length > 0) {
-      console.log(`Found ${cachedStations.length} cached stations for genre "${initialTag}"`);
+    // Фильтруем кэшированные станции через черный список
+    const cachedFiltered = filterBlacklistedStations(cachedStations);
+    if (cachedFiltered.length > 0) {
+      console.log(`Found ${cachedFiltered.length} cached stations for genre "${initialTag}" (${cachedStations.length - cachedFiltered.length} filtered by blacklist)`);
       
-      // Выбираем случайную станцию из кэша
-      const randomCachedStation = cachedStations[Math.floor(Math.random() * cachedStations.length)];
+      // Выбираем случайную станцию из отфильтрованного кэша
+      const randomCachedStation = cachedFiltered[Math.floor(Math.random() * cachedFiltered.length)];
       
       // Создаем временный список станций с кэшированной станцией
       const tempStationList = [randomCachedStation];
@@ -1472,7 +1767,14 @@ export default function Home() {
       for (let attempt = 0; attempt < 3 && secureIndex === -1; attempt += 1) {
         let result: { tag: string; stations: Station[] } | null = null;
         try {
-          result = await fetchStations(resolvedTag, useRandomOrder);
+          // Для быстрых жанров (кнопки) используем максимально быстрый путь без AI.
+          // Для свободного текста и fallback-сценариев — включаем AI-валидатор.
+          const useAiForThisSearch = !isQuickTag;
+          result = await fetchStations(
+            resolvedTag,
+            useRandomOrder,
+            useAiForThisSearch ? { showStatus: true } : undefined
+          );
           if (sessionId !== sessionRef.current) return;
           stationList = result.stations;
         } catch (error) {
@@ -1495,7 +1797,11 @@ export default function Home() {
         setActiveTag(resolvedTag);
 
         if (!stationList.length) {
-          throw new Error("No stations found");
+          console.warn(
+            `No stations found for tag "${resolvedTag}" on attempt ${attempt + 1}`
+          );
+          // Пробуем еще раз (до 3 попыток), не ломая сразу UX.
+          continue;
         }
 
         // Все станции уже прошли фильтрацию на бэкенде (HTTPS, lastcheckok: 1, релевантность)
@@ -1503,9 +1809,10 @@ export default function Home() {
         secureIndex = Math.floor(Math.random() * stationList.length);
       }
 
-      // secureIndex всегда будет >= 0, так как мы проверяем stationList.length выше
-      if (secureIndex < 0 || secureIndex >= stationList.length) {
-        throw new Error("No secure streams available for this tag");
+      // Если после всех попыток так и не нашли ни одной станции — показываем
+      // понятное сообщение об ошибке.
+      if (secureIndex < 0 || !stationList.length) {
+        throw new Error("No stations found");
       }
 
       setStations(stationList);
@@ -1710,6 +2017,7 @@ export default function Home() {
     setConnectionProgress(0);
     setIsConnecting(false);
     activeStationUrlRef.current = null;
+    stopStaticNoise();
   };
 
   const handleTogglePlay = async () => {
@@ -1754,6 +2062,22 @@ export default function Home() {
   const handleNextStation = async () => {
     if (isConnecting || isSwitchingRef.current || isLoadingRef.current) return;
     
+    // АВТО-БАН (UX): Если пользователь нажал Next в первые 5 секунд, баним станцию
+    if (stationPlayStartTimeRef.current) {
+      const playDuration = Date.now() - stationPlayStartTimeRef.current;
+      if (playDuration < 5000) {
+        const currentStation = stationsRef.current[stationIndexRef.current];
+        if (currentStation && activeTagRef.current) {
+          console.log(`Station switched too quickly (${playDuration}ms), adding to blacklist`);
+          addToBlacklist(currentStation, activeTagRef.current);
+        }
+      }
+      stationPlayStartTimeRef.current = null;
+    }
+    
+    // Включаем лёгкое "радиошипение" на время поиска следующей станции
+    void startStaticNoise();
+
     // Полный сброс аудио перед переключением
     if (audioRef.current) {
       audioRef.current.pause();
@@ -1761,18 +2085,39 @@ export default function Home() {
       audioRef.current.load();
     }
     
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/574a7f99-6c21-48ad-9731-30948465c78f',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        sessionId:'debug-session',
+        runId:'run-next',
+        hypothesisId:'HN1',
+        location:'page.tsx:handleNextStation:entry',
+        message:'handleNextStation called',
+        data:{
+          currentGenre: activeTagRef.current ?? 'lofi',
+          stationCount: stationsRef.current.length,
+          hasPreloaded: preloadedStationsRef.current.length > 0
+        },
+        timestamp:Date.now()
+      })
+    }).catch(()=>{});
+    // #endregion
+
     const list = stationsRef.current;
     if (!list.length) return;
     failedCountRef.current = 0;
     
     const currentGenre = activeTagRef.current ?? "lofi";
-    
     // ПРИОРИТЕТ 1: Проверяем verifiedStations для текущего жанра (непроигранные в сессии)
     const unplayedVerified = getUnplayedVerifiedStations(currentGenre);
-    if (unplayedVerified.length > 0) {
-      console.log(`Found ${unplayedVerified.length} unplayed verified stations for genre "${currentGenre}"`);
+    // Фильтруем verified станции через черный список
+    const verifiedFiltered = filterBlacklistedStations(unplayedVerified);
+    if (verifiedFiltered.length > 0) {
+      console.log(`Found ${verifiedFiltered.length} unplayed verified stations for genre "${currentGenre}" (${unplayedVerified.length - verifiedFiltered.length} filtered by blacklist)`);
       // Выбираем случайную станцию из непроигранных verified
-      const randomVerified = unplayedVerified[Math.floor(Math.random() * unplayedVerified.length)];
+      const randomVerified = verifiedFiltered[Math.floor(Math.random() * verifiedFiltered.length)];
       
       // Создаем временный список с verified станцией
       stationsRef.current = [randomVerified];
@@ -1789,14 +2134,21 @@ export default function Home() {
       const preloaded = preloadedStationsRef.current;
       preloadedStationsRef.current = []; // Clear used preload
       
-      stationsRef.current = preloaded;
-      setStations(preloaded);
-      const randomIndex = Math.floor(Math.random() * preloaded.length);
-      await startStationPlayback(randomIndex);
-      
-      // Start preloading next stations in background (non-blocking)
-      void preloadNextStations();
-      return;
+      // Фильтруем preloaded станции через черный список
+      const preloadedFiltered = filterBlacklistedStations(preloaded);
+      if (preloadedFiltered.length > 0) {
+        stationsRef.current = preloadedFiltered;
+        setStations(preloadedFiltered);
+        const randomIndex = Math.floor(Math.random() * preloadedFiltered.length);
+        await startStationPlayback(randomIndex);
+        
+        // Start preloading next stations in background (non-blocking)
+        void preloadNextStations();
+        return;
+      } else {
+        // Если все preloaded станции в черном списке, продолжаем к следующему приоритету
+        console.log("All preloaded stations are blacklisted, fetching new stations");
+      }
     }
     
     // ПРИОРИТЕТ 3: Если verifiedStations закончились или пусты, делаем стандартный fetch
@@ -1804,7 +2156,8 @@ export default function Home() {
     try {
       const { stations: newStations } = await fetchStations(
         currentGenre,
-        true // useRandomOrder = true for random selection
+        true,
+        { showStatus: true }
       );
       if (newStations.length > 0) {
         stationsRef.current = newStations;
@@ -1817,8 +2170,11 @@ export default function Home() {
         void preloadNextStations();
       } else {
         // Fallback to next in existing list if fetch fails
-        const nextIndex = (stationIndexRef.current + 1) % list.length;
-        await startStationPlayback(nextIndex);
+        const list = stationsRef.current;
+        if (list.length > 0) {
+          const nextIndex = (stationIndexRef.current + 1) % list.length;
+          await startStationPlayback(nextIndex);
+        }
       }
     } catch (error) {
       // Игнорируем ошибки отмены запроса
@@ -1828,8 +2184,11 @@ export default function Home() {
       }
       console.error("Failed to fetch new stations, using existing list:", error);
       // Fallback to next in existing list
-      const nextIndex = (stationIndexRef.current + 1) % list.length;
-      await startStationPlayback(nextIndex);
+      const list = stationsRef.current;
+      if (list.length > 0) {
+        const nextIndex = (stationIndexRef.current + 1) % list.length;
+        await startStationPlayback(nextIndex);
+      }
     } finally {
       isLoadingRef.current = false;
     }
