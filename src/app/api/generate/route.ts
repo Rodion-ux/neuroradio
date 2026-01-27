@@ -1,13 +1,48 @@
-import { RadioBrowserApi } from "radio-browser-api";
 import { NextRequest, NextResponse } from "next/server";
 import Replicate from "replicate";
 
 export const runtime = "nodejs";
 
-type Station = {
-  id: string;
+const RADIO_MIRRORS = [
+  // Локальное зеркало (Амстердам) — приоритет по пингу
+  "https://nl1.api.radio-browser.info",
+  "https://de1.api.radio-browser.info",
+  "https://fr1.api.radio-browser.info",
+  "https://at1.api.radio-browser.info",
+] as const;
+
+// Статический denylist станций, которые стабильно не поддерживаются браузерами
+// (определено по runtime-логам NotSupportedError).
+const BACKEND_BLOCKED_STATIONS = new Set<string>([
+  // Rinse UK
+  "9c100db7-ba97-4e6f-821f-dba1ed08ad52",
+  // DnBRadio.com - Darkstep Channel (DE Mirror)
+  "bc195601-561a-473a-b3b4-7b80e540811c",
+  // Eruption Radio
+  "2c3eac2c-4588-42d3-9c2e-0c6e99afaf6e",
+  // DnBRadio Main channel 192k
+  "edaa4ad7-bdf3-11e8-aaf2-52543be04c81",
+  // Sunshine Live - Drum 'N' Bass
+  "962c0432-0601-11e8-ae97-52543be04c81",
+  // Radio Caprice - Minimal Techno
+  "19c57c60-bf6f-481b-9197-cb7e4f58c589",
+]);
+
+type RawStation = {
+  stationuuid: string;
   name: string;
-  url?: string;
+  url: string;
+  url_resolved: string;
+  tags: string;
+  favicon?: string;
+  country?: string;
+  codec?: string;
+};
+
+type Station = {
+  id: string; // stationuuid, используется как ключ
+  stationuuid: string;
+  name: string;
   urlResolved: string;
   tags: string[];
   favicon?: string;
@@ -15,23 +50,49 @@ type Station = {
   codec?: string;
 };
 
-const radioBrowser = new RadioBrowserApi("Neuro Radio", true);
 const replicate = new Replicate({ auth: process.env.REPLICATE_API_TOKEN });
 
-const ensureBaseUrl = async () => {
-  if (!radioBrowser.getBaseUrl()) {
-    await radioBrowser.resolveBaseUrl();
-  }
-};
+/**
+ * Federated Radio-Browser API fetch с ротацией зеркал.
+ * Пробует каждый URL по очереди, при 5xx или таймауте — переключается.
+ */
+const fetchWithFallback = async (
+  path: string,
+  params: URLSearchParams,
+  init?: RequestInit
+): Promise<Response> => {
+  let lastError: unknown;
 
-const withRetry = async <T>(operation: () => Promise<T>): Promise<T> => {
-  try {
-    return await operation();
-  } catch (error) {
-    console.warn("RadioBrowser call failed, refreshing server.", error);
-    await radioBrowser.resolveBaseUrl();
-    return await operation();
+  for (const base of RADIO_MIRRORS) {
+    const url = `${base}${path}?${params.toString()}`;
+    try {
+      const response = await fetch(url, {
+        ...init,
+        // Быстрый таймаут на зеркало, чтобы успеть переключиться
+        signal: init?.signal ?? AbortSignal.timeout(2000),
+        headers: {
+          "User-Agent": "Neuro Radio",
+          ...(init?.headers ?? {}),
+        },
+      });
+
+      // Если зеркало отвечает 5xx — считаем его временно мёртвым и идём дальше
+      if (!response.ok && response.status >= 500) {
+        lastError = new Error(`Mirror ${base} returned ${response.status}`);
+        continue;
+      }
+
+      return response;
+    } catch (error) {
+      lastError = error;
+      // Переходим к следующему зеркалу
+      continue;
+    }
   }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("All Radio-Browser mirrors failed");
 };
 
 const isHttpsUrl = (value?: string) =>
@@ -43,6 +104,31 @@ const getStreamFormat = (url: string): "mp3" | "aac" | "ogg" | "other" => {
   if (lower.includes("aac") || lower.endsWith(".aac")) return "aac";
   if (lower.includes("ogg") || lower.endsWith(".ogg")) return "ogg";
   return "other";
+};
+
+/**
+ * Строгий HTTPS:
+ * - используем только url_resolved (если есть) либо url
+ * - если http:// — пробуем заменить на https://
+ * - если после этого не https:// — отбрасываем станцию
+ */
+const normalizeStreamUrl = (value?: string): string | null => {
+  if (typeof value !== "string") return null;
+  let url = value.trim();
+
+  if (!/^https?:\/\//i.test(url)) {
+    return null;
+  }
+
+  if (url.toLowerCase().startsWith("http://")) {
+    url = "https://" + url.slice("http://".length);
+  }
+
+  if (!url.toLowerCase().startsWith("https://")) {
+    return null;
+  }
+
+  return url;
 };
 
 // Проверка соответствия станции запрошенному жанру
@@ -74,32 +160,56 @@ const isStationRelevant = (station: Station, requestedTag: string): boolean => {
   return true;
 };
 
-const normalizeStations = (stations: Station[], requestedTag?: string) => {
-  const filtered = stations.filter((station) => {
-    const url = station.urlResolved || station.url;
-    if (!url) return false;
-    
-    // СТРОГИЙ HTTPS: Полностью исключаем HTTP ссылки
-    // Проверяем несколько раз для надежности
-    const urlLower = url.trim().toLowerCase();
-    if (!urlLower.startsWith("https://")) return false;
-    if (urlLower.startsWith("http://")) return false; // Дополнительная проверка
-    if (!isHttpsUrl(url)) return false;
-    
-    // Проверка релевантности жанру (если передан requestedTag)
-    if (requestedTag && !isStationRelevant(station, requestedTag)) {
-      return false;
-    }
-    
-    return true;
-  });
+const normalizeStations = (stations: RawStation[], requestedTag?: string): Station[] => {
+  const filtered: Station[] = [];
 
-  console.log(`Found ${filtered.length} stations after strict HTTPS and relevance filter (requested: ${requestedTag || "any"})`);
+  for (const station of stations) {
+    // Отбрасываем станции из статического denylist по stationuuid
+    if (BACKEND_BLOCKED_STATIONS.has(station.stationuuid)) {
+      continue;
+    }
+
+    const rawUrl = station.url_resolved || station.url;
+    const normalizedUrl = normalizeStreamUrl(rawUrl);
+    if (!normalizedUrl) continue;
+
+    const tagsArray =
+      typeof station.tags === "string" && station.tags.length
+        ? station.tags
+            .split(",")
+            .map((t) => t.trim())
+            .filter(Boolean)
+        : [];
+
+    const normalized: Station = {
+      id: station.stationuuid,
+      stationuuid: station.stationuuid,
+      name: station.name,
+      urlResolved: normalizedUrl,
+      tags: tagsArray,
+      favicon: station.favicon,
+      country: station.country,
+      codec: station.codec,
+    };
+
+    // Проверка релевантности жанру (если передан requestedTag)
+    if (requestedTag && !isStationRelevant(normalized, requestedTag)) {
+      continue;
+    }
+
+    filtered.push(normalized);
+  }
+
+  console.log(
+    `Found ${filtered.length} stations after strict HTTPS and relevance filter (requested: ${
+      requestedTag || "any"
+    })`
+  );
 
   const withFormat = filtered.map((station) => ({
     station,
-    format: getStreamFormat(station.urlResolved || station.url || ""),
-    isMp3: getStreamFormat(station.urlResolved || station.url || "") === "mp3",
+    format: getStreamFormat(station.urlResolved),
+    isMp3: getStreamFormat(station.urlResolved) === "mp3",
   }));
 
   const sorted = withFormat.sort((a, b) => {
@@ -108,14 +218,7 @@ const normalizeStations = (stations: Station[], requestedTag?: string) => {
     return 0;
   });
 
-  return sorted.map(({ station }) => ({
-    id: station.id,
-    name: station.name,
-    urlResolved: station.urlResolved || station.url || "",
-    tags: Array.isArray(station.tags) ? station.tags : [],
-    favicon: station.favicon,
-    country: station.country,
-  }));
+  return sorted.map(({ station }) => station);
 };
 
 const AI_STOP_TAGS = ["talk", "news", "pop"];
@@ -134,23 +237,15 @@ const collectAiCandidates = async (
   const tagVariants = normalizedTag.split(",").map(t => t.trim()).filter(Boolean);
   const collected: ReturnType<typeof normalizeStations> = [];
   const seen = new Set<string>();
-  const orderType = useRandomOrder ? "random" : "clickCount";
+  const orderType: "random" | "votes" = useRandomOrder ? "random" : "votes";
 
   for (const searchTag of tagVariants) {
     if (collected.length >= limit) break;
-    const stations = await withRetry(() => {
-      const query = {
-        tag: searchTag,
-        limit,
-        order: orderType as any,
-        reverse: false,
-        hideBroken: false,
-        lastcheckok: 1,
-      };
-      return radioBrowser.searchStations(query as any);
-    });
-
-    const normalized = normalizeStations(stations as Station[], searchTag);
+    const normalized = await searchStationsByTagOnce(
+      searchTag,
+      limit,
+      orderType
+    );
     for (const station of normalized) {
       if (collected.length >= limit) break;
       if (!station.id || seen.has(station.id)) continue;
@@ -277,47 +372,33 @@ const pickFastestStation = async (
  * Check if a radio station URL is accessible
  * Uses HEAD request with timeout to quickly verify availability
  */
-const checkStationAvailability = async (url: string, timeoutMs = 3000): Promise<boolean> => {
+const checkStationAvailability = async (url: string, timeoutMs = 800): Promise<boolean> => {
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-    
     const response = await fetch(url, {
       method: 'HEAD',
-      signal: controller.signal,
       headers: {
         'User-Agent': 'Mozilla/5.0 (compatible; NeuroRadio/1.0)',
-        'Range': 'bytes=0-1', // Request minimal range to test stream
       },
+      // Быстрая проверка доступности с помощью AbortSignal.timeout
+      signal: AbortSignal.timeout(timeoutMs),
     });
-    
-    clearTimeout(timeoutId);
-    
-    // Accept 200, 206 (partial content), 301, 302 (redirects)
-    const isOk = response.ok || response.status === 206 || 
-                 response.status === 301 || response.status === 302;
-    
-    return isOk;
-  } catch (error) {
-    // If HEAD fails, try GET with minimal data
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-      
-      const response = await fetch(url, {
-        method: 'GET',
-        signal: controller.signal,
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (compatible; NeuroRadio/1.0)',
-          'Range': 'bytes=0-1024', // Request small chunk
-        },
-      });
-      
-      clearTimeout(timeoutId);
-      return response.ok || response.status === 206;
-    } catch {
+
+    // Явно отбрасываем станции с 403/451 (требуется VPN / блокировка)
+    if (response.status === 403 || response.status === 451) {
       return false;
     }
+
+    // Остальные статусы: считаем доступными, если ok либо редиректы/частичный контент
+    const isOk =
+      response.ok ||
+      response.status === 206 ||
+      response.status === 301 ||
+      response.status === 302;
+
+    return isOk;
+  } catch (error) {
+    // Любая ошибка (включая таймаут) — считаем поток недоступным
+    return false;
   }
 };
 
@@ -326,17 +407,14 @@ const checkStationAvailability = async (url: string, timeoutMs = 3000): Promise<
  * Returns only stations that are confirmed accessible
  */
 const filterAvailableStations = async (
-  stations: ReturnType<typeof normalizeStations>,
-  maxChecks = 20
+  stations: ReturnType<typeof normalizeStations>
 ): Promise<ReturnType<typeof normalizeStations>> => {
   if (!stations.length) return [];
 
   const startedAt = Date.now();
 
-  // Check up to maxChecks stations in parallel
-  const stationsToCheck = stations.slice(0, maxChecks);
   const availabilityChecks = await Promise.allSettled(
-    stationsToCheck.map((station) =>
+    stations.map((station) =>
       checkStationAvailability(station.urlResolved).then((available) => ({
         station,
         available,
@@ -355,18 +433,71 @@ const filterAvailableStations = async (
   const durationMs = Date.now() - startedAt;
 
   console.info(
-    `Checked ${stationsToCheck.length} stations, found ${availableStations.length} available in ${durationMs}ms`
+    `Checked ${stations.length} stations, found ${availableStations.length} available in ${durationMs}ms`
   );
 
   // Return only available stations
   return availableStations;
 };
 
+/**
+ * Один HTTP-вызов /json/stations/search с заданным тегом и параметрами.
+ * Всегда проставляет:
+ * - hidebroken=true
+ * - https=true
+ * - order=votes|random
+ * - reverse=true (сначала самые популярные/проверенные)
+ */
+const searchStationsByTagOnce = async (
+  tag: string,
+  limit: number,
+  order: "votes" | "random"
+): Promise<Station[]> => {
+  const params = new URLSearchParams({
+    tag,
+    limit: String(limit),
+    hidebroken: "true",
+    https: "true",
+    order,
+    reverse: "true",
+    lastcheckok: "1",
+  });
+
+  const response = await fetchWithFallback("/json/stations/search", params);
+  if (!response.ok) {
+    throw new Error(`Radio-Browser search failed with ${response.status}`);
+  }
+
+  const raw = (await response.json()) as RawStation[];
+
+  // #region agent log
+  fetch('http://127.0.0.1:7242/ingest/574a7f99-6c21-48ad-9731-30948465c78f',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({
+      sessionId:'debug-session',
+      runId:'run-backend',
+      hypothesisId:'H3',
+      location:'generate/route.ts:searchStationsByTagOnce',
+      message:'Radio-Browser search result',
+      data:{
+        tag,
+        limit,
+        order,
+        rawCount:Array.isArray(raw)?raw.length:null
+      },
+      timestamp:Date.now()
+    })
+  }).catch(()=>{});
+  // #endregion
+
+  return normalizeStations(raw, tag);
+};
+
 class NoStationsError extends Error {}
 
 export async function GET(request: NextRequest) {
   try {
-    await ensureBaseUrl();
     const { searchParams } = new URL(request.url);
     const rawTag = searchParams.get("tag")?.trim() ?? "";
     const displayTag = rawTag.length ? rawTag.toLowerCase() : "lofi";
@@ -431,8 +562,6 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    await ensureBaseUrl();
-
     // Простой поиск по тегу
     const rawTag = typeof body.tag === "string" ? body.tag.trim() : "";
     const displayTag = rawTag.length ? rawTag.toLowerCase() : "lofi";
@@ -636,31 +765,40 @@ const fetchSecureStationsForTag = async (
   const allSecureStations: ReturnType<typeof normalizeStations> = [];
   
   // Используем useRandomOrder для выбора порядка сортировки
-  const orderType = useRandomOrder ? "random" : "clickCount";
-  
-  const searchStartedAt = Date.now();
+  const orderType: "random" | "votes" = useRandomOrder ? "random" : "votes";
 
   for (const searchTag of tagVariants) {
-    const stations = await withRetry(() => {
-      const query = {
-        tag: searchTag,
-        limit: 100,
-        order: orderType as any,
-        reverse: false,
-        hideBroken: false,
-        lastcheckok: 1,
-      };
-      return radioBrowser.searchStations(query as any);
-    });
-    
-    const secure = normalizeStations(stations as Station[], searchTag);
-    
+    const secure = await searchStationsByTagOnce(
+      searchTag,
+      100,
+      orderType
+    );
+
     if (secure.length) {
       allSecureStations.push(...secure);
     }
   }
-  
-  const searchDurationMs = Date.now() - searchStartedAt;
+
+  // #region agent log
+  fetch('http://127.0.0.1:7242/ingest/574a7f99-6c21-48ad-9731-30948465c78f',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({
+      sessionId:'debug-session',
+      runId:'run-backend',
+      hypothesisId:'H4',
+      location:'generate/route.ts:fetchSecureStationsForTag:after-search',
+      message:'Collected stations for tag',
+      data:{
+        tag,
+        useRandomOrder,
+        totalSecure: allSecureStations.length,
+        variants: tagVariants,
+      },
+      timestamp:Date.now()
+    })
+  }).catch(()=>{});
+  // #endregion
 
   if (allSecureStations.length) {
     const skipAvailability = options?.skipAvailability === true;
@@ -670,7 +808,7 @@ const fetchSecureStationsForTag = async (
     // черный список. Для других случаев оставляем полную проверку.
     const baseStations = skipAvailability
       ? allSecureStations
-      : await filterAvailableStations(allSecureStations, 20);
+      : await filterAvailableStations(allSecureStations);
     
     if (!baseStations.length) {
       console.warn(`No available stations found for tag "${tag}"`);
@@ -704,21 +842,14 @@ const fetchSecureStationsForTag = async (
     const allFallbackStations: ReturnType<typeof normalizeStations> = [];
     
     // Используем useRandomOrder для fallback тоже
-    const fallbackOrderType = useRandomOrder ? "random" : "clickCount";
+    const fallbackOrderType: "random" | "votes" = useRandomOrder ? "random" : "votes";
     
     for (const searchTag of fallbackTagVariants) {
-      const fallbackStations = await withRetry(() => {
-        const query = {
-          tag: searchTag,
-          limit: 100,
-          order: fallbackOrderType as any,
-          reverse: false,
-          hideBroken: false,
-          lastcheckok: 1,
-        };
-        return radioBrowser.searchStations(query as any);
-      });
-      const secureFallback = normalizeStations(fallbackStations as Station[], searchTag);
+      const secureFallback = await searchStationsByTagOnce(
+        searchTag,
+        100,
+        fallbackOrderType
+      );
       if (secureFallback.length) {
         allFallbackStations.push(...secureFallback);
       }
@@ -726,7 +857,7 @@ const fetchSecureStationsForTag = async (
     
     if (allFallbackStations.length) {
       // Filter to only available stations
-      const availableFallbackStations = await filterAvailableStations(allFallbackStations, 20);
+      const availableFallbackStations = await filterAvailableStations(allFallbackStations);
       
       if (availableFallbackStations.length === 0) {
         throw new NoStationsError(`No available stations for tag "${tag}" (fallback also failed)`);

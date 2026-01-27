@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import OpenAI from "openai";
+import Replicate from "replicate";
 
 export const runtime = "nodejs";
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+const replicate = new Replicate({
+  auth: process.env.REPLICATE_API_TOKEN,
 });
 
 type BlacklistedStation = {
@@ -22,8 +22,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ stopWords: [] }, { status: 200 });
     }
 
-    if (!process.env.OPENAI_API_KEY) {
-      console.warn("OPENAI_API_KEY not configured, skipping AI analysis");
+    if (!process.env.REPLICATE_API_TOKEN) {
+      console.warn("REPLICATE_API_TOKEN not configured, skipping AI analysis");
       return NextResponse.json({ stopWords: [] }, { status: 200 });
     }
 
@@ -46,24 +46,18 @@ ${stationList}
 
 Верни только JSON, без дополнительного текста.`;
 
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        {
-          role: "system",
-          content:
-            "You are a music genre analysis assistant. Analyze blacklisted radio stations and return stop words as JSON only.",
-        },
-        {
-          role: "user",
-          content: prompt,
-        },
-      ],
-      temperature: 0.3,
-      max_tokens: 200,
-    });
+    const input = {
+      system_prompt:
+        "You are a music genre analysis assistant. Analyze blacklisted radio stations and return stop words as JSON only.",
+      prompt,
+    };
 
-    const responseText = completion.choices[0]?.message?.content || "{}";
+    const output = await replicate.run("openai/gpt-4.1-mini", { input });
+
+    // Собираем ответ (Replicate может вернуть массив строк)
+    const responseText = Array.isArray(output)
+      ? output.join("").trim()
+      : String(output ?? "{}").trim();
     
     // Парсим JSON из ответа
     let result: { stopWords: string[] } = { stopWords: [] };

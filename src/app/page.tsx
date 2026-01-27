@@ -275,9 +275,6 @@ export default function Home() {
   const preloadInProgressRef = useRef(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const isLoadingRef = useRef(false);
-  const staticContextRef = useRef<AudioContext | null>(null);
-  const staticSourceRef = useRef<AudioBufferSourceNode | null>(null);
-  const isStaticPlayingRef = useRef(false);
   const audioEventHandlersRef = useRef<{
     handlePlay?: () => void;
     handlePause?: () => void;
@@ -289,54 +286,6 @@ export default function Home() {
   }>({});
 
   const isMuted = volume === 0;
-
-  const startStaticNoise = async () => {
-    if (isStaticPlayingRef.current) return;
-    try {
-      const context =
-        staticContextRef.current && staticContextRef.current.state !== "closed"
-          ? staticContextRef.current
-          : new AudioContext();
-      staticContextRef.current = context;
-
-      const durationSeconds = 2;
-      const sampleRate = context.sampleRate;
-      const frameCount = sampleRate * durationSeconds;
-      const buffer = context.createBuffer(1, frameCount, sampleRate);
-      const data = buffer.getChannelData(0);
-
-      for (let i = 0; i < frameCount; i++) {
-        data[i] = (Math.random() * 2 - 1) * 0.35;
-      }
-
-      const source = context.createBufferSource();
-      source.buffer = buffer;
-      source.loop = true;
-      source.connect(context.destination);
-      source.start();
-
-      staticSourceRef.current = source;
-      isStaticPlayingRef.current = true;
-    } catch {
-      // Вспомогательный эффект, можно тихо игнорировать ошибки
-    }
-  };
-
-  const stopStaticNoise = () => {
-    if (staticSourceRef.current) {
-      try {
-        staticSourceRef.current.stop();
-        staticSourceRef.current.disconnect();
-      } catch {
-        // ignore
-      }
-      staticSourceRef.current = null;
-    }
-    if (staticContextRef.current && staticContextRef.current.state === "running") {
-      staticContextRef.current.suspend().catch(() => {});
-    }
-    isStaticPlayingRef.current = false;
-  };
 
   // Функции для работы с кэшем станций в localStorage
   const CACHE_KEY_PREFIX = "neuro_radio_cache_";
@@ -698,9 +647,6 @@ export default function Home() {
     }).catch(()=>{});
     // #endregion
 
-    // Включаем "шум поиска", если поток отвалился и мы будем искать следующую станцию
-    void startStaticNoise();
-
     // НЕ блокируем если уже идет переключение - это нормально при автоматическом skip
     // Блокируем только если это повторный вызов для той же ошибки
     if (isSwitchingRef.current && failedCountRef.current > 0) {
@@ -863,7 +809,6 @@ export default function Home() {
     }
 
     const handlePlay = () => {
-      stopStaticNoise();
       setPlaybackState("playing");
       setStatusText(undefined);
       setStatusDetail(undefined);
@@ -988,6 +933,29 @@ export default function Home() {
 
     const safeIndex = (index + list.length) % list.length;
     const station = list[safeIndex];
+
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/574a7f99-6c21-48ad-9731-30948465c78f',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        sessionId:'debug-session',
+        runId:'run-playback',
+        hypothesisId:'H1',
+        location:'page.tsx:startStationPlayback:station-selected',
+        message:'Selected station for playback',
+        data:{
+          index,
+          safeIndex,
+          stationId:station?.id ?? null,
+          stationName:station?.name ?? null,
+          urlResolved:station?.urlResolved ?? null,
+          tags:station?.tags ?? null
+        },
+        timestamp:Date.now()
+      })
+    }).catch(()=>{});
+    // #endregion
 
     // #region agent log
     fetch('http://127.0.0.1:7242/ingest/574a7f99-6c21-48ad-9731-30948465c78f',{
@@ -1311,6 +1279,27 @@ export default function Home() {
       if (volume > 0) {
         fadeToVolume(volume);
       }
+
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/574a7f99-6c21-48ad-9731-30948465c78f',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({
+          sessionId:'debug-session',
+          runId:'run-playback',
+          hypothesisId:'H4',
+          location:'page.tsx:startStationPlayback:play-success',
+          message:'audio.play() succeeded',
+          data:{
+            stationId: station.id,
+            stationName: station.name,
+            urlResolved: station.urlResolved,
+            tag: activeTagRef.current ?? null
+          },
+          timestamp:Date.now()
+        })
+      }).catch(()=>{});
+      // #endregion
       
       // Периодическая проверка состояния аудио после play() для обнаружения ошибок
       // Это помогает поймать ошибки, которые возникают асинхронно
@@ -1355,6 +1344,29 @@ export default function Home() {
       // Start preloading next stations in background after successful playback
       void preloadNextStations();
     } catch (error) {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/574a7f99-6c21-48ad-9731-30948465c78f',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({
+          sessionId:'debug-session',
+          runId:'run-playback',
+          hypothesisId:'H2',
+          location:'page.tsx:startStationPlayback:play-error',
+          message:'audio.play() failed',
+          data:{
+            errorName:error instanceof Error ? error.name : null,
+            errorMessage:error instanceof Error ? error.message : String(error),
+            audioErrorCode:audio.error?.code ?? null,
+            audioErrorMessage:audio.error?.message ?? null,
+            networkState:audio.networkState,
+            readyState:audio.readyState,
+            src:audio.src
+          },
+          timestamp:Date.now()
+        })
+      }).catch(()=>{});
+      // #endregion
       // Специальная обработка AbortError: это нормальная ситуация,
       // когда мы быстро переключаем станцию и вызываем pause() до завершения play().
       const isAbortError =
@@ -1594,7 +1606,6 @@ export default function Home() {
     setAiReasoning("");
     failedCountRef.current = 0;
     activeStationUrlRef.current = null;
-    void startStaticNoise();
 
     const processed = isQuickTag ? null : processTextInput(userActivity);
     let initialTag = isQuickTag
@@ -2017,7 +2028,6 @@ export default function Home() {
     setConnectionProgress(0);
     setIsConnecting(false);
     activeStationUrlRef.current = null;
-    stopStaticNoise();
   };
 
   const handleTogglePlay = async () => {
@@ -2075,9 +2085,6 @@ export default function Home() {
       stationPlayStartTimeRef.current = null;
     }
     
-    // Включаем лёгкое "радиошипение" на время поиска следующей станции
-    void startStaticNoise();
-
     // Полный сброс аудио перед переключением
     if (audioRef.current) {
       audioRef.current.pause();
