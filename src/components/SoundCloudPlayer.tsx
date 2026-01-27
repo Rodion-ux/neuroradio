@@ -27,6 +27,7 @@ declare global {
         Events: {
           READY: string;
           FINISH: string;
+          PLAY_PROGRESS: string;
         };
       };
     };
