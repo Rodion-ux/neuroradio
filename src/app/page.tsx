@@ -299,15 +299,7 @@ export default function Home() {
   const preloadInProgressRef = useRef(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const isLoadingRef = useRef(false);
-  // Две "деки" для миксов SoundCloud — для будущего кроссфейда A/B.
-  const soundcloudRefA = useRef<SoundCloudPlayerHandle | null>(null);
-  const soundcloudRefB = useRef<SoundCloudPlayerHandle | null>(null);
-  const [activeDeck, setActiveDeck] = useState<"A" | "B">("A");
-  const activeDeckRef = useRef<"A" | "B">("A");
-  const crossfadeInProgressRef = useRef(false);
-  const crossfadeIntervalRef = useRef<number | null>(null);
-  const preloadingNextMixRef = useRef(false);
-  const preloadNextMixIndexRef = useRef<number | null>(null);
+  const soundcloudRef = useRef<SoundCloudPlayerHandle | null>(null);
   const audioEventHandlersRef = useRef<{
     handlePlay?: () => void;
     handlePause?: () => void;
@@ -566,12 +558,9 @@ export default function Home() {
       }
       audio.volume = volume;
     } else {
-      // В режиме миксов управляем громкостью сразу обеих дек,
-      // чтобы кроссфейд оставался в рамках пользовательского уровня.
-      const deckA = soundcloudRefA.current;
-      const deckB = soundcloudRefB.current;
-      if (deckA) deckA.setVolume(volume);
-      if (deckB) deckB.setVolume(volume);
+      if (soundcloudRef.current) {
+        soundcloudRef.current.setVolume(volume);
+      }
     }
   }, [volume, mode]);
 
@@ -1557,6 +1546,14 @@ export default function Home() {
       return;
     }
 
+    // Если пользователь ввёл текст в инпут — сразу обновляем UI с этим текстом.
+    const moodInput = userActivity.trim().length ? userActivity.trim() : "";
+    const userInputText = moodInput || t("statusIdle");
+    
+    // Мгновенный статус: сразу показываем занятие пользователя, а не жанр по умолчанию.
+    setStationTag(userInputText.toUpperCase());
+    setStatusDetail(`СКАНИРУЮ КОНТЕКСТ: ${userInputText.toUpperCase()}`);
+
     // AI-курирование: отправляем текст на бэкенд, который сам вызывает OpenAI + SoundCloud.
     try {
       const response = await fetch("/api/radio/ai-mixes", {
@@ -1565,17 +1562,25 @@ export default function Home() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          text: userActivity.trim().length ? userActivity : t("statusIdle"),
+          mood: moodInput || undefined,
           lang: lang === "RU" ? "ru" : "en",
         }),
       });
 
+      const payload = await response.json().catch(() => null);
+
       if (!response.ok) {
-        const payload = await response.json().catch(() => null);
-        throw new Error(payload?.error ?? "Failed to fetch AI-curated mixes");
+        const message =
+          payload?.error ??
+          (response.status === 404
+            ? "No mixes found for curated search"
+            : response.status === 500
+              ? "НЕЙРОСЕТЬ НЕ ПОДОБРАЛА ТРЕК, ПОПРОБУЙ ЕЩЕ РАЗ"
+              : "Failed to fetch AI-curated mixes");
+        throw new Error(message);
       }
 
-      const data = (await response.json()) as {
+      const data = payload as {
         mixes: Mix[];
         ai: { search_term: string; min_duration_minutes: number; mood_tag: string };
       };
@@ -1610,22 +1615,31 @@ export default function Home() {
         `[AI CURATOR] ${data.ai.search_term} • ${data.ai.min_duration_minutes} min`
       );
 
-      // Запускаем первый микс на активной деке A/B.
-      const initialDeckHandle =
-        activeDeckRef.current === "A" ? soundcloudRefA.current : soundcloudRefB.current;
-      if (initialDeckHandle) {
-        initialDeckHandle.setVolume(volume);
-        initialDeckHandle.loadTrack(first.id, true);
+      if (soundcloudRef.current) {
+        soundcloudRef.current.setVolume(volume);
+        soundcloudRef.current.loadTrack(first.id, true);
       }
       setDuration(first.duration > 0 ? first.duration / 1000 : 0);
 
       setScreen("playing");
       setPlaybackState("playing");
     } catch (error) {
-      console.error("AI curated mixes error:", error);
-      setStatusText(
-        error instanceof Error ? error.message : "Unable to fetch AI-curated mixes"
-      );
+      const message =
+        error instanceof Error ? error.message : "Unable to fetch AI-curated mixes";
+      if (
+        message.includes("No mixes found") ||
+        message.includes("ВАЙБ НЕ НАЙДЕН") ||
+        message.includes("НИЧЕГО НЕ НАЙДЕНО")
+      ) {
+        // Не логируем в консоль для случая "ничего не найдено" — это нормальная ситуация.
+        setStatusText("НИЧЕГО НЕ НАЙДЕНО, ПОПРОБУЙ ДРУГОЙ ВАЙБ");
+        setStatusDetail(undefined);
+      } else {
+        // Для реальных ошибок (включая 500) показываем сообщение о нейросети.
+        console.error("AI curated mixes error:", error);
+        setStatusText("НЕЙРОСЕТЬ НЕ ПОДОБРАЛА ТРЕК, ПОПРОБУЙ ЕЩЕ РАЗ");
+        setStatusDetail(undefined);
+      }
       setScreen("idle");
     } finally {
       if (sessionId === sessionRef.current) {
@@ -1788,12 +1802,9 @@ export default function Home() {
     // Сбрасываем флаг готовности
     audioReadyRef.current = false;
     
-    // Останавливаем обе деки SoundCloud (режим миксов), чтобы не было "призрачного" воспроизведения.
-    if (soundcloudRefA.current) {
-      soundcloudRefA.current.pause();
-    }
-    if (soundcloudRefB.current) {
-      soundcloudRefB.current.pause();
+    // Останавливаем SoundCloud-виджет (режим миксов), чтобы не было "призрачного" воспроизведения.
+    if (soundcloudRef.current) {
+      soundcloudRef.current.pause();
     }
 
     // Clear preloaded stations when stopping
@@ -1822,9 +1833,7 @@ export default function Home() {
     if (isConnecting || isSwitchingRef.current) return;
 
     if (mode === "mixes") {
-      const activeDeckHandle =
-        activeDeckRef.current === "A" ? soundcloudRefA.current : soundcloudRefB.current;
-      if (!activeDeckHandle || !currentMix) return;
+      if (!soundcloudRef.current || !currentMix) return;
       // #region agent log
       fetch('http://127.0.0.1:7242/ingest/574a7f99-6c21-48ad-9731-30948465c78f',{
         method:'POST',
@@ -1837,7 +1846,7 @@ export default function Home() {
           message:'Toggle play in mixes mode',
           data:{
             playbackState,
-            hasWidget: !!activeDeckHandle,
+            hasWidget: !!soundcloudRef.current,
             currentMixId: currentMix?.id ?? null
           },
           timestamp:Date.now()
@@ -1845,10 +1854,10 @@ export default function Home() {
       }).catch(()=>{});
       // #endregion agent log
       if (playbackState === "playing") {
-        activeDeckHandle.pause();
+        soundcloudRef.current.pause();
         setPlaybackState("paused");
       } else {
-        activeDeckHandle.play();
+        soundcloudRef.current.play();
         setPlaybackState("playing");
       }
       return;
@@ -1919,9 +1928,7 @@ export default function Home() {
 
     // Режим миксов SoundCloud
     if (mode === "mixes") {
-      const activeDeckHandle =
-        activeDeckRef.current === "A" ? soundcloudRefA.current : soundcloudRefB.current;
-      if (!playlist.length || !activeDeckHandle) return;
+      if (!playlist.length || !soundcloudRef.current) return;
       const count = playlist.length;
       let nextIndex = Math.floor(Math.random() * count);
       if (count > 1 && nextIndex === currentMixIndex) {
@@ -1951,7 +1958,7 @@ export default function Home() {
       setCurrentMixIndex(nextIndex);
       setStationName(nextMix.title || t("unknownStation"));
       setTrackTitle(nextMix.user?.username ?? null);
-      activeDeckHandle.loadTrack(nextMix.id, true);
+      soundcloudRef.current.loadTrack(nextMix.id, true);
       setDuration(nextMix.duration > 0 ? nextMix.duration / 1000 : 0);
       setPlaybackState("playing");
       return;
@@ -2071,15 +2078,13 @@ export default function Home() {
 
     // Режим миксов SoundCloud
     if (mode === "mixes") {
-      const activeDeckHandle =
-        activeDeckRef.current === "A" ? soundcloudRefA.current : soundcloudRefB.current;
-      if (!playlist.length || !activeDeckHandle) return;
+      if (!playlist.length || !soundcloudRef.current) return;
       const prevIndex = (currentMixIndex - 1 + playlist.length) % playlist.length;
       const prevMix = playlist[prevIndex];
       setCurrentMixIndex(prevIndex);
       setStationName(prevMix.title || t("unknownStation"));
       setTrackTitle(prevMix.user?.username ?? null);
-      activeDeckHandle.loadTrack(prevMix.id, true);
+      soundcloudRef.current.loadTrack(prevMix.id, true);
       setDuration(prevMix.duration > 0 ? prevMix.duration / 1000 : 0);
       setPlaybackState("playing");
       return;
@@ -2186,19 +2191,14 @@ export default function Home() {
 
       // Дополнительно останавливаем SoundCloud-виджет (режим миксов),
       // чтобы звук гарантированно прекращался при выходе на главный экран.
-      if (soundcloudRefA.current) {
-        soundcloudRefA.current.pause();
-      }
-      if (soundcloudRefB.current) {
-        soundcloudRefB.current.pause();
+      if (soundcloudRef.current) {
+        soundcloudRef.current.pause();
       }
     }
   }, [screen]);
 
   const handleMixFinish = () => {
-    const activeDeckHandle =
-      activeDeckRef.current === "A" ? soundcloudRefA.current : soundcloudRefB.current;
-    if (!playlist.length || !activeDeckHandle) {
+    if (!playlist.length || !soundcloudRef.current) {
       // #region agent log
       fetch('http://127.0.0.1:7242/ingest/574a7f99-6c21-48ad-9731-30948465c78f',{
         method:'POST',
@@ -2211,7 +2211,7 @@ export default function Home() {
           message:'handleMixFinish guard prevented autoplay',
           data:{
             playlistLength: playlist.length,
-            hasWidget: !!activeDeckHandle,
+            hasWidget: !!soundcloudRef.current,
             currentMixIndex
           },
           timestamp:Date.now()
@@ -2245,7 +2245,7 @@ export default function Home() {
     setCurrentMixIndex(nextIndex);
     setStationName(nextMix.title || t("unknownStation"));
     setTrackTitle(nextMix.user?.username ?? null);
-    activeDeckHandle.loadTrack(nextMix.id, true);
+    soundcloudRef.current.loadTrack(nextMix.id, true);
     setDuration(nextMix.duration > 0 ? nextMix.duration / 1000 : 0);
     setPlaybackState("playing");
   };
@@ -2254,103 +2254,17 @@ export default function Home() {
     const positionSec = positionMs / 1000;
     const durationFromEventSec = durationMs > 0 ? durationMs / 1000 : 0;
 
+    setCurrentTime(positionSec);
+
     // Если собственной длительности ещё нет, а виджет прислал валидную — запоминаем её.
     if (duration <= 0 && durationFromEventSec > 0) {
       setDuration(durationFromEventSec);
     }
-
-    const effectiveDurationSec =
-      duration > 0 ? duration : durationFromEventSec;
-
-    setCurrentTime(positionSec);
-
-    if (!playlist.length || effectiveDurationSec <= 0) return;
-
-    const timeLeft = effectiveDurationSec - positionSec;
-
-    // 1) За ~15 секунд до конца — предзагружаем следующий микс в неактивную деку с громкостью 0.
-    if (timeLeft <= 15 && !preloadingNextMixRef.current) {
-      const count = playlist.length;
-      if (count === 0) return;
-      let nextIndex = (currentMixIndex + 1) % count;
-      // Небольшая рандомизация, но избегаем текущего индекса.
-      if (count > 2) {
-        const random = Math.floor(Math.random() * count);
-        if (random !== currentMixIndex) {
-          nextIndex = random;
-        }
-      }
-
-      const inactiveDeckHandle =
-        activeDeckRef.current === "A" ? soundcloudRefB.current : soundcloudRefA.current;
-      const nextMix = playlist[nextIndex];
-      if (inactiveDeckHandle && nextMix) {
-        preloadingNextMixRef.current = true;
-        preloadNextMixIndexRef.current = nextIndex;
-
-        // Готовим вторую деку: сразу ставим громкость в 0 и запускаем микс.
-        inactiveDeckHandle.setVolume(0);
-        inactiveDeckHandle.loadTrack(nextMix.id, true);
-      }
-    }
-
-    // 2) За ~10 секунд до конца — запускаем сам кроссфейд, если уже что‑то предзагружено.
-    if (timeLeft <= 10 && preloadingNextMixRef.current && !crossfadeInProgressRef.current) {
-      const targetIndex = preloadNextMixIndexRef.current;
-      if (targetIndex != null) {
-        const fromDeck =
-          activeDeckRef.current === "A" ? soundcloudRefA.current : soundcloudRefB.current;
-        const toDeck =
-          activeDeckRef.current === "A" ? soundcloudRefB.current : soundcloudRefA.current;
-
-        if (fromDeck && toDeck) {
-          crossfadeInProgressRef.current = true;
-
-          const userVolume = volume;
-          const steps = 40; // 40 шагов * 250мс ≈ 10 секунд
-          const stepDuration = 250;
-          let currentStep = 0;
-
-          toDeck.setVolume(0);
-
-          const intervalId = window.setInterval(() => {
-            currentStep += 1;
-            const t = Math.min(1, currentStep / steps);
-            const fadeOutVolume = userVolume * (1 - t);
-            const fadeInVolume = userVolume * t;
-
-            fromDeck.setVolume(Math.max(0, fadeOutVolume));
-            toDeck.setVolume(Math.max(0, fadeInVolume));
-
-            if (t >= 1) {
-              window.clearInterval(intervalId);
-              crossfadeIntervalRef.current = null;
-              crossfadeInProgressRef.current = false;
-              preloadingNextMixRef.current = false;
-
-              // Останавливаем старую деку и фиксируем новую как активную.
-              fromDeck.pause();
-              activeDeckRef.current = activeDeckRef.current === "A" ? "B" : "A";
-              setActiveDeck(activeDeckRef.current);
-              setCurrentMixIndex(targetIndex);
-              const targetMix = playlist[targetIndex];
-              if (targetMix) {
-                setDuration(targetMix.duration > 0 ? targetMix.duration / 1000 : 0);
-              }
-            }
-          }, stepDuration);
-
-          crossfadeIntervalRef.current = intervalId;
-        }
-      }
-    }
   };
 
   const handleSeek = (seconds: number) => {
-    const activeDeckHandle =
-      activeDeckRef.current === "A" ? soundcloudRefA.current : soundcloudRefB.current;
-    if (!activeDeckHandle || !Number.isFinite(seconds)) return;
-    activeDeckHandle.seekTo(seconds);
+    if (!soundcloudRef.current || !Number.isFinite(seconds)) return;
+    soundcloudRef.current.seekTo(seconds);
     setCurrentTime(seconds);
   };
 
@@ -2434,27 +2348,25 @@ export default function Home() {
 
       // #region agent log
       fetch('http://127.0.0.1:7242/ingest/574a7f99-6c21-48ad-9731-30948465c78f',{
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({
-          sessionId:'debug-session',
-          runId:'pre-fix',
-          hypothesisId:'H7',
-          location:'page.tsx:fetchMixes',
-          message:'About to call loadTrack for first mix',
-            data:{
-            hasRef: !!soundcloudRefA.current || !!soundcloudRefB.current,
-            firstId: first?.id ?? null
-          },
-          timestamp:Date.now()
-        })
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+      sessionId:'debug-session',
+      runId:'pre-fix',
+      hypothesisId:'H7',
+      location:'page.tsx:fetchMixes',
+      message:'About to call loadTrack for first mix',
+          data:{
+          hasRef: !!soundcloudRef.current,
+          firstId: first?.id ?? null
+        },
+      timestamp:Date.now()
+      })
       }).catch(()=>{});
       // #endregion agent log
-      const initialDeckHandle =
-        activeDeckRef.current === "A" ? soundcloudRefA.current : soundcloudRefB.current;
-      if (initialDeckHandle) {
-        initialDeckHandle.setVolume(volume);
-        initialDeckHandle.loadTrack(first.id, true);
+      if (soundcloudRef.current) {
+        soundcloudRef.current.setVolume(volume);
+        soundcloudRef.current.loadTrack(first.id, true);
       }
 
       setScreen("playing");
@@ -2520,7 +2432,7 @@ export default function Home() {
     // Настройки анализатора для баса и ритма:
     // более маленькое сглаживание даёт резкую, ритмичную картину.
     analyser.fftSize = 256;
-    analyser.smoothingTimeConstant = 0.4;
+    analyser.smoothingTimeConstant = 0.3; // Более резкая реакция на бит
 
     const bufferLength = analyser.frequencyBinCount;
     const freqData = new Uint8Array(bufferLength);
@@ -2529,12 +2441,13 @@ export default function Home() {
     let smoothedEnergy = 0.25;
     // "Прыгающий" уровень удара по бочке — вспышка вверх и плавное затухание.
     let kickLevel = 0;
+    let previousBassAvg = 0;
 
     const tick = () => {
       analyser.getByteFrequencyData(freqData);
 
-      // Фокусируемся на самом низком басе: первые 4–6 бинов спектра.
-      const bassBins = Math.min(6, bufferLength);
+      // Фокусируемся на самом низком басе: первые 4–8 бинов спектра для лучшего обнаружения ударов.
+      const bassBins = Math.min(8, bufferLength);
       let bassSum = 0;
       for (let i = 0; i < bassBins; i += 1) {
         bassSum += freqData[i];
@@ -2542,8 +2455,8 @@ export default function Home() {
       const bassRawAvg = bassSum / bassBins; // 0..255
 
       // Усиление баса — даже тихий бас становится заметен.
-      const bassMultiplier = 3.0;
-      let bassNorm = (bassRawAvg / 255) * bassMultiplier; // 0..~3
+      const bassMultiplier = 3.5; // Увеличено для более заметной реакции
+      let bassNorm = (bassRawAvg / 255) * bassMultiplier; // 0..~3.5
 
       // Общая энергия по всему спектру — для хаоса.
       let totalSum = 0;
@@ -2553,25 +2466,30 @@ export default function Home() {
       const energyAvg = totalSum / (bufferLength * 255);
 
       // Сглаживание, чтобы избежать цифрового "песка", но оставить резкие пики.
-      smoothedBass += (bassNorm - smoothedBass) * 0.55;
-      smoothedEnergy += (energyAvg - smoothedEnergy) * 0.35;
+      smoothedBass += (bassNorm - smoothedBass) * 0.6; // Более быстрая реакция
+      smoothedEnergy += (energyAvg - smoothedEnergy) * 0.4;
 
-      // Порог для "удара" — если бас выше ~200 из 255, подбрасываем kickLevel.
-      if (bassRawAvg > 200) {
-        kickLevel = Math.min(2.5, kickLevel + (bassRawAvg - 200) / 55);
+      // Обнаружение ударов: сравниваем текущий бас с предыдущим для обнаружения резких скачков.
+      const bassDelta = bassRawAvg - previousBassAvg;
+      previousBassAvg = bassRawAvg;
+
+      // Порог для "удара" — если бас выше ~180 из 255 или есть резкий скачок, подбрасываем kickLevel.
+      if (bassRawAvg > 180 || (bassDelta > 30 && bassRawAvg > 120)) {
+        const kickBoost = bassDelta > 30 ? 1.5 : 1.0; // Дополнительный буст при резком скачке
+        kickLevel = Math.min(3.0, kickLevel + (bassRawAvg - 150) / 50 * kickBoost);
       } else {
         // Эффект гравитации: быстро вверх, медленно вниз.
-        kickLevel *= 0.85;
+        kickLevel *= 0.82; // Немного быстрее затухание для лучшей синхронизации
       }
 
-      // Лёгкий визуальный хаос: зависит от энергии трека.
-      const chaosStrength = (smoothedEnergy + kickLevel * 0.5) * 0.9;
+      // Лёгкий визуальный хаос: зависит от энергии трека и ударов.
+      const chaosStrength = (smoothedEnergy + kickLevel * 0.6) * 1.0;
       const chaos = (Math.random() - 0.5) * chaosStrength;
 
-      const combinedLevel = smoothedBass + kickLevel + chaos;
+      const combinedLevel = smoothedBass + kickLevel * 1.2 + chaos; // Усилен kickLevel для лучшей синхронизации
 
       // Передаём уровень в визуализатор: он может подпрыгивать до 2–3 высоты.
-      audioLevelRef.current = Math.max(0.1, Math.min(2.4, combinedLevel));
+      audioLevelRef.current = Math.max(0.1, Math.min(2.8, combinedLevel));
       animationFrameRef.current = requestAnimationFrame(tick);
     };
 
@@ -2584,21 +2502,12 @@ export default function Home() {
     };
   }, [playbackState]);
 
-  const soundCloudPlayers = (
-    <>
-      <SoundCloudPlayer
-        ref={soundcloudRefA}
-        onFinish={handleMixFinish}
-        onProgress={handleMixProgress}
-      />
-      <SoundCloudPlayer
-        ref={soundcloudRefB}
-        // Вторая дека слушает те же колбэки прогресса/финиша, но мы
-        // управляем громкостью и активностью через activeDeckRef.
-        onFinish={handleMixFinish}
-        onProgress={handleMixProgress}
-      />
-    </>
+  const soundCloudPlayer = (
+    <SoundCloudPlayer
+      ref={soundcloudRef}
+      onFinish={handleMixFinish}
+      onProgress={handleMixProgress}
+    />
   );
 
   // Глобовый cleanup на размонтирование `Home`:
@@ -2610,23 +2519,25 @@ export default function Home() {
         audioRef.current.src = "";
         audioRef.current.load();
       }
-      if (soundcloudRefA.current) {
-        soundcloudRefA.current.pause();
-      }
-      if (soundcloudRefB.current) {
-        soundcloudRefB.current.pause();
+      if (soundcloudRef.current) {
+        soundcloudRef.current.pause();
       }
     };
   }, []);
 
   if (screen === "loading") {
+    // Если есть statusDetail с текстом "СКАНИРУЮ КОНТЕКСТ:", используем его как title.
+    const loadingTitle =
+      statusDetail && statusDetail.startsWith("СКАНИРУЮ КОНТЕКСТ:")
+        ? statusDetail
+        : format("scanningAirwaves", { tag: stationTag });
     return (
       <>
-        {soundCloudPlayers}
+        {soundCloudPlayer}
         <LoadingScreen
           progress={connectionProgress}
-          title={format("scanningAirwaves", { tag: stationTag })}
-          statusLine={statusDetail}
+          title={loadingTitle}
+          statusLine={statusDetail && statusDetail.startsWith("СКАНИРУЮ КОНТЕКСТ:") ? undefined : statusDetail}
           cancelLabel={t("cancel")}
           lang={lang}
           onSetLang={setLangValue}
@@ -2638,7 +2549,7 @@ export default function Home() {
   if (screen === "playing") {
     return (
       <>
-        {soundCloudPlayers}
+        {soundCloudPlayer}
         <PlayerScreen
           stationName={stationName || t("searching")}
           currentTag={stationTag}
@@ -2685,7 +2596,7 @@ export default function Home() {
 
   return (
     <>
-      {soundCloudPlayers}
+      {soundCloudPlayer}
       <IdleScreen
         onStart={(activity, tagOverride) =>
           handleStart(

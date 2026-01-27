@@ -78,21 +78,22 @@ export const AudioWave = memo(function AudioWave({
       const isActive = isPlayingRef.current;
 
       // "Удар" по бочке: если уровень энергии выше порога — резко поднимаем beatIntensity.
-      if (isActive && energy > 0.7) {
+      // Более чувствительный порог для лучшей синхронизации с битом.
+      if (isActive && energy > 0.6) {
         beatIntensityRef.current = Math.min(
-          1.8,
-          beatIntensityRef.current + (energy - 0.7) * 2.2
+          2.0,
+          beatIntensityRef.current + (energy - 0.6) * 2.5
         );
       } else {
-        beatIntensityRef.current *= 0.86;
+        beatIntensityRef.current *= 0.84; // Немного быстрее затухание для лучшей синхронизации
       }
 
-      const beatBoost = 1.2 + beatIntensityRef.current * 1.4;
+      const beatBoost = 1.3 + beatIntensityRef.current * 1.5; // Усилен для более заметной реакции
 
       const target = isActive
-        ? Math.min(2.1, Math.max(0.08, energy * beatBoost))
+        ? Math.min(2.3, Math.max(0.08, energy * beatBoost))
         : 0.01; // когда пауза — почти плоская линия
-      amplitudeScale += (target - amplitudeScale) * 0.35;
+      amplitudeScale += (target - amplitudeScale) * 0.4; // Более быстрая реакция на изменения
 
       context.clearRect(0, 0, width, height);
       context.lineCap = "square";

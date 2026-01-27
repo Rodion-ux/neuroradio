@@ -22,6 +22,7 @@ type SoundCloudTrack = {
   artwork_url?: string | null;
   permalink_url: string;
   user: SoundCloudUser;
+  playback_count?: number;
 };
 
 type MixResponseItem = {
@@ -40,8 +41,11 @@ let cachedToken: {
   expiresAt: number; // ms timestamp
 } | null = null;
 
-// Минимальная длительность микса: 3 минуты
-const MIN_MIX_DURATION_MS = 3 * 60 * 1000;
+// Диапазоны длительности для разных шагов поиска
+const ELITE_MIN_DURATION_MS = 20 * 60 * 1000; // 20 минут
+const ELITE_MAX_DURATION_MS = 30 * 60 * 1000; // 30 минут
+const FALLBACK_MIN_DURATION_MS = 5 * 60 * 1000; // 5 минут
+const FALLBACK_MAX_DURATION_MS = 60 * 60 * 1000; // 60 минут
 
 async function getAccessToken(): Promise<string> {
   const clientId = process.env.SOUNDCLOUD_CLIENT_ID;
@@ -89,23 +93,14 @@ async function getAccessToken(): Promise<string> {
   return data.access_token;
 }
 
-async function searchMixesByGenre(genre: string): Promise<MixResponseItem[]> {
+async function fetchTracks(params: URLSearchParams): Promise<SoundCloudTrack[]> {
   const accessToken = await getAccessToken();
-
-  const params = new URLSearchParams({
-    q: genre,
-    // Используем genres вместо tags для более точного попадания
-    genres: genre,
-    limit: "50",
-    linked_partitioning: "1",
-  });
 
   const response = await fetch(`${SOUNDCLOUD_API_BASE}/tracks?${params.toString()}`, {
     headers: {
       Authorization: `Bearer ${accessToken}`,
       Accept: "application/json",
     },
-    // Без кеша, но токен кешируется отдельно
     cache: "no-store",
   });
 
@@ -116,30 +111,100 @@ async function searchMixesByGenre(genre: string): Promise<MixResponseItem[]> {
     );
   }
 
-  const data = (await response.json()) as any;
+  const data = (await response.json()) as unknown;
 
-  // Если SoundCloud вернул структуру ошибки, не пытаемся трактовать её как треки.
-  if (data && (data.errors || data.error || data.status === "error")) {
+  if (
+    data &&
+    typeof data === "object" &&
+    ( // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (data as any).errors ||
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (data as any).error ||
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (data as any).status === "error")
+  ) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const payload = data as any;
     const message =
-      (Array.isArray(data.errors) && data.errors[0]?.error_message) ||
-      data.error ||
+      (Array.isArray(payload.errors) && payload.errors[0]?.error_message) ||
+      payload.error ||
       "Unknown SoundCloud error";
     throw new Error(`SoundCloud API error: ${message}`);
   }
 
-  // При linked_partitioning=1 треки находятся в поле collection.
-  const rawTracks = data?.collection ?? [];
-  if (!Array.isArray(rawTracks)) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const collection = (data as any)?.collection ?? [];
+  if (!Array.isArray(collection)) {
     console.warn("Unexpected SoundCloud tracks payload shape:", data);
     return [];
   }
 
-  const tracks = rawTracks as SoundCloudTrack[];
+  return collection as SoundCloudTrack[];
+}
 
-  // Фильтруем только достаточно длинные миксы (>= 3 минут)
+async function searchMixesByGenre(genre: string): Promise<MixResponseItem[]> {
+  // ШАГ 1. Попытка найти "элитные" миксы: 20–30 минут и playback_count >= 3000.
+  const eliteParams = new URLSearchParams({
+    q: genre,
+    genres: genre,
+    "duration[from]": String(ELITE_MIN_DURATION_MS),
+    "duration[to]": String(ELITE_MAX_DURATION_MS),
+    limit: "50",
+    linked_partitioning: "1",
+  });
+
+  const eliteTracksRaw = await fetchTracks(eliteParams);
+
+  const eliteTracks = eliteTracksRaw
+    .filter(
+      (track) =>
+        typeof track.duration === "number" &&
+        track.duration >= ELITE_MIN_DURATION_MS &&
+        track.duration <= ELITE_MAX_DURATION_MS &&
+        typeof track.playback_count === "number" &&
+        track.playback_count >= 3000
+    );
+
+  if (eliteTracks.length) {
+    const eliteMixes: MixResponseItem[] = eliteTracks.map((track) => ({
+      id: track.id,
+      title: track.title,
+      user: {
+        username: track.user?.username ?? "Unknown DJ",
+      },
+      artwork_url: track.artwork_url ?? null,
+      duration: track.duration,
+      permalink_url: track.permalink_url,
+    }));
+
+    // Рандомизация: выбираем случайный трек из первой десятки результатов.
+    if (eliteMixes.length > 1) {
+      const topCount = Math.min(10, eliteMixes.length);
+      const randomIndex = Math.floor(Math.random() * topCount);
+      if (randomIndex > 0) {
+        const [picked] = eliteMixes.splice(randomIndex, 1);
+        eliteMixes.unshift(picked);
+      }
+    }
+
+    return eliteMixes;
+  }
+
+  // ШАГ 2. Фоллбек: поиск 5–60 минут без ограничений по прослушиваниям.
+  const fallbackParams = new URLSearchParams({
+    q: genre,
+    genres: genre,
+    limit: "50",
+    linked_partitioning: "1",
+  });
+
+  const tracks = await fetchTracks(fallbackParams);
+
   const longMixes = tracks.filter(
     (track) =>
-      typeof track.duration === "number" && track.duration >= MIN_MIX_DURATION_MS
+      typeof track.duration === "number" &&
+      track.duration >= FALLBACK_MIN_DURATION_MS &&
+      track.duration <= FALLBACK_MAX_DURATION_MS
   );
 
   const mixes: MixResponseItem[] = longMixes.map((track) => ({
@@ -153,11 +218,9 @@ async function searchMixesByGenre(genre: string): Promise<MixResponseItem[]> {
     permalink_url: track.permalink_url,
   }));
 
-  // Лёгкая рандомизация: перемещаем случайный микс из первых 10 в начало массива,
-  // чтобы при каждом запросе первым был новый трек.
   if (mixes.length > 1) {
-    const limit = Math.min(mixes.length, 10);
-    const randomIndex = Math.floor(Math.random() * limit);
+    const topCount = Math.min(10, mixes.length);
+    const randomIndex = Math.floor(Math.random() * topCount);
     if (randomIndex > 0) {
       const [randomTrack] = mixes.splice(randomIndex, 1);
       mixes.unshift(randomTrack);
