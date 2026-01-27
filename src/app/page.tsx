@@ -628,25 +628,6 @@ export default function Home() {
   }, [isConnecting]);
 
   const handleStreamError = async (reason?: string) => {
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/574a7f99-6c21-48ad-9731-30948465c78f',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({
-        sessionId:'debug-session',
-        runId:'run-next',
-        hypothesisId:'HN3',
-        location:'page.tsx:handleStreamError:entry',
-        message:'handleStreamError called',
-        data:{
-          reason: reason ?? null,
-          failedCount: failedCountRef.current
-        },
-        timestamp:Date.now()
-      })
-    }).catch(()=>{});
-    // #endregion
-
     // НЕ блокируем если уже идет переключение - это нормально при автоматическом skip
     // Блокируем только если это повторный вызов для той же ошибки
     if (isSwitchingRef.current && failedCountRef.current > 0) {
@@ -933,50 +914,6 @@ export default function Home() {
 
     const safeIndex = (index + list.length) % list.length;
     const station = list[safeIndex];
-
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/574a7f99-6c21-48ad-9731-30948465c78f',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({
-        sessionId:'debug-session',
-        runId:'run-playback',
-        hypothesisId:'H1',
-        location:'page.tsx:startStationPlayback:station-selected',
-        message:'Selected station for playback',
-        data:{
-          index,
-          safeIndex,
-          stationId:station?.id ?? null,
-          stationName:station?.name ?? null,
-          urlResolved:station?.urlResolved ?? null,
-          tags:station?.tags ?? null
-        },
-        timestamp:Date.now()
-      })
-    }).catch(()=>{});
-    // #endregion
-
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/574a7f99-6c21-48ad-9731-30948465c78f',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({
-        sessionId:'debug-session',
-        runId:'run-next',
-        hypothesisId:'HN2',
-        location:'page.tsx:startStationPlayback:entry',
-        message:'startStationPlayback called',
-        data:{
-          index,
-          safeIndex,
-          stationUrl: station?.urlResolved ?? null,
-          stationName: station?.name ?? null
-        },
-        timestamp:Date.now()
-      })
-    }).catch(()=>{});
-    // #endregion
     stationIndexRef.current = safeIndex;
     setStationIndex(safeIndex);
     setStationName(station.name || t("unknownStation"));
@@ -1279,27 +1216,6 @@ export default function Home() {
       if (volume > 0) {
         fadeToVolume(volume);
       }
-
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/574a7f99-6c21-48ad-9731-30948465c78f',{
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({
-          sessionId:'debug-session',
-          runId:'run-playback',
-          hypothesisId:'H4',
-          location:'page.tsx:startStationPlayback:play-success',
-          message:'audio.play() succeeded',
-          data:{
-            stationId: station.id,
-            stationName: station.name,
-            urlResolved: station.urlResolved,
-            tag: activeTagRef.current ?? null
-          },
-          timestamp:Date.now()
-        })
-      }).catch(()=>{});
-      // #endregion
       
       // Периодическая проверка состояния аудио после play() для обнаружения ошибок
       // Это помогает поймать ошибки, которые возникают асинхронно
@@ -1344,29 +1260,6 @@ export default function Home() {
       // Start preloading next stations in background after successful playback
       void preloadNextStations();
     } catch (error) {
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/574a7f99-6c21-48ad-9731-30948465c78f',{
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({
-          sessionId:'debug-session',
-          runId:'run-playback',
-          hypothesisId:'H2',
-          location:'page.tsx:startStationPlayback:play-error',
-          message:'audio.play() failed',
-          data:{
-            errorName:error instanceof Error ? error.name : null,
-            errorMessage:error instanceof Error ? error.message : String(error),
-            audioErrorCode:audio.error?.code ?? null,
-            audioErrorMessage:audio.error?.message ?? null,
-            networkState:audio.networkState,
-            readyState:audio.readyState,
-            src:audio.src
-          },
-          timestamp:Date.now()
-        })
-      }).catch(()=>{});
-      // #endregion
       // Специальная обработка AbortError: это нормальная ситуация,
       // когда мы быстро переключаем станцию и вызываем pause() до завершения play().
       const isAbortError =
@@ -2091,26 +1984,6 @@ export default function Home() {
       audioRef.current.src = "";
       audioRef.current.load();
     }
-    
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/574a7f99-6c21-48ad-9731-30948465c78f',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({
-        sessionId:'debug-session',
-        runId:'run-next',
-        hypothesisId:'HN1',
-        location:'page.tsx:handleNextStation:entry',
-        message:'handleNextStation called',
-        data:{
-          currentGenre: activeTagRef.current ?? 'lofi',
-          stationCount: stationsRef.current.length,
-          hasPreloaded: preloadedStationsRef.current.length > 0
-        },
-        timestamp:Date.now()
-      })
-    }).catch(()=>{});
-    // #endregion
 
     const list = stationsRef.current;
     if (!list.length) return;

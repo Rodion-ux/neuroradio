@@ -469,28 +469,6 @@ const searchStationsByTagOnce = async (
   }
 
   const raw = (await response.json()) as RawStation[];
-
-  // #region agent log
-  fetch('http://127.0.0.1:7242/ingest/574a7f99-6c21-48ad-9731-30948465c78f',{
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({
-      sessionId:'debug-session',
-      runId:'run-backend',
-      hypothesisId:'H3',
-      location:'generate/route.ts:searchStationsByTagOnce',
-      message:'Radio-Browser search result',
-      data:{
-        tag,
-        limit,
-        order,
-        rawCount:Array.isArray(raw)?raw.length:null
-      },
-      timestamp:Date.now()
-    })
-  }).catch(()=>{});
-  // #endregion
-
   return normalizeStations(raw, tag);
 };
 
@@ -778,27 +756,6 @@ const fetchSecureStationsForTag = async (
       allSecureStations.push(...secure);
     }
   }
-
-  // #region agent log
-  fetch('http://127.0.0.1:7242/ingest/574a7f99-6c21-48ad-9731-30948465c78f',{
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({
-      sessionId:'debug-session',
-      runId:'run-backend',
-      hypothesisId:'H4',
-      location:'generate/route.ts:fetchSecureStationsForTag:after-search',
-      message:'Collected stations for tag',
-      data:{
-        tag,
-        useRandomOrder,
-        totalSecure: allSecureStations.length,
-        variants: tagVariants,
-      },
-      timestamp:Date.now()
-    })
-  }).catch(()=>{});
-  // #endregion
 
   if (allSecureStations.length) {
     const skipAvailability = options?.skipAvailability === true;
