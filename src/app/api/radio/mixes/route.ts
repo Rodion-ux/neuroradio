@@ -48,7 +48,7 @@ const FALLBACK_MIN_DURATION_MS = 5 * 60 * 1000; // 5 минут
 const FALLBACK_MAX_DURATION_MS = 60 * 60 * 1000; // 60 минут
 
 async function getAccessToken(): Promise<string> {
-  const clientId = process.env.SOUNDCLOUD_CLIENT_ID;
+  const clientId = process.env.NEXT_PUBLIC_SOUNDCLOUD_CLIENT_ID;
   const clientSecret = process.env.SOUNDCLOUD_CLIENT_SECRET;
 
   if (!clientId || !clientSecret) {

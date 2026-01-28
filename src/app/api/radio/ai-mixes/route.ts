@@ -59,7 +59,7 @@ let cachedToken: {
 } | null = null;
 
 async function getAccessToken(): Promise<string> {
-  const clientId = process.env.SOUNDCLOUD_CLIENT_ID;
+  const clientId = process.env.NEXT_PUBLIC_SOUNDCLOUD_CLIENT_ID;
   const clientSecret = process.env.SOUNDCLOUD_CLIENT_SECRET;
 
   if (!clientId || !clientSecret) {
