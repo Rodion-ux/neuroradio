@@ -59,6 +59,8 @@ export const SoundCloudPlayer = forwardRef<SoundCloudPlayerHandle, SoundCloudPla
       ((positionMs: number, durationMs: number) => void) | undefined
     >(undefined);
     const durationRef = useRef(0);
+    // Если loadTrack вызывают до инициализации виджета, сохраняем запрос сюда.
+    const pendingLoadRef = useRef<{ id: number; autoPlay: boolean } | null>(null);
 
     const initializeWidget = () => {
       if (!iframeRef.current) return;
@@ -73,6 +75,16 @@ export const SoundCloudPlayer = forwardRef<SoundCloudPlayerHandle, SoundCloudPla
         widget.getDuration((ms) => {
           durationRef.current = ms;
         });
+        // Если до READY уже был запрос loadTrack — выполняем его сейчас.
+        if (pendingLoadRef.current) {
+          const { id, autoPlay } = pendingLoadRef.current;
+          const url = `https://api.soundcloud.com/tracks/${id}`;
+          widget.load(url, {
+            auto_play: autoPlay,
+            buying: false,
+          });
+          pendingLoadRef.current = null;
+        }
       };
 
       const handleFinish = () => {
@@ -142,6 +154,8 @@ export const SoundCloudPlayer = forwardRef<SoundCloudPlayerHandle, SoundCloudPla
         loadTrack: (id: number, autoPlay = true) => {
           const widget = widgetRef.current;
           if (!widget) {
+            // Виджет ещё не готов — сохраним запрос и выполним его после READY.
+            pendingLoadRef.current = { id, autoPlay };
             return;
           }
           const url = `https://api.soundcloud.com/tracks/${id}`;
