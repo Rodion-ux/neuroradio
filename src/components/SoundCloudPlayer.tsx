@@ -204,6 +204,11 @@ export const SoundCloudPlayer = forwardRef<SoundCloudPlayerHandle, SoundCloudPla
         src="https://w.soundcloud.com/player/?url=https%3A//api.soundcloud.com/tracks/0&auto_play=false"
         width="0"
         height="0"
+        // В проде (Vercel / HTTPS-домен) без этого атрибута
+        // браузеры часто блокируют авто‑воспроизведение аудио
+        // внутри iframe, даже если play() вызван по клику пользователя.
+        // allow="autoplay" явно разрешает плееру SoundCloud стартовать звук.
+        allow="autoplay"
         style={{
           position: "absolute",
           width: 0,
