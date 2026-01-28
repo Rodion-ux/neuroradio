@@ -2368,10 +2368,17 @@ export default function Home() {
       setScreen("playing");
       setPlaybackState("playing");
     } catch (error) {
-      console.error("Failed to fetch mixes:", error);
-      setStatusText(
-        error instanceof Error ? error.message : "Unable to fetch mixes"
-      );
+      const message = error instanceof Error ? error.message : "Unable to fetch mixes";
+      if (message.includes("No mixes found")) {
+        // Ситуация, когда по жанру ничего не нашли — это не техническая ошибка.
+        // Не шумим в консоли, просто показываем понятный юзерский текст.
+        setStatusText("НИЧЕГО НЕ НАЙДЕНО, ПОПРОБУЙ ДРУГОЙ ЖАНР");
+        setStatusDetail(undefined);
+      } else {
+        console.error("Failed to fetch mixes:", error);
+        setStatusText(message);
+        setStatusDetail(undefined);
+      }
       setScreen("idle");
     } finally {
       setIsLoadingMixes(false);
