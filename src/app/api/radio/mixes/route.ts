@@ -46,6 +46,25 @@ const ELITE_MIN_DURATION_MS = 20 * 60 * 1000; // 20 минут
 const ELITE_MAX_DURATION_MS = 30 * 60 * 1000; // 30 минут
 const FALLBACK_MIN_DURATION_MS = 5 * 60 * 1000; // 5 минут
 const FALLBACK_MAX_DURATION_MS = 60 * 60 * 1000; // 60 минут
+// Короткие треки (не миксы) — чтобы выдавать их наравне с миксами
+const SHORT_TRACK_MIN_MS = 1 * 60 * 1000; // 1 минута
+const SHORT_TRACK_MAX_MS = 10 * 60 * 1000; // 10 минут
+
+// Исключаем арабские/ближневосточные треки по скрипту и ключевым словам
+const ARABIC_SCRIPT_REGEX = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]/;
+const ARABIC_KEYWORDS = [
+  "arabic", "arab", "middle east", "turkish", "egyptian", "moroccan",
+  "lebanese", "syrian", "iraqi", "saudi", "uae", "dubai", "oriental",
+  "عربي", "موسيقى", "تركي", "مصري", "لبناني", "سوري",
+];
+
+function isLikelyArabic(track: SoundCloudTrack): boolean {
+  const title = (track.title ?? "").toLowerCase();
+  const username = (track.user?.username ?? "").toLowerCase();
+  const text = `${title} ${username}`;
+  if (ARABIC_SCRIPT_REGEX.test(text)) return true;
+  return ARABIC_KEYWORDS.some((kw) => text.includes(kw.toLowerCase()));
+}
 
 async function getAccessToken(): Promise<string> {
   const clientId = process.env.NEXT_PUBLIC_SOUNDCLOUD_CLIENT_ID;
@@ -156,6 +175,7 @@ async function searchMixesByGenre(genre: string): Promise<MixResponseItem[]> {
   const eliteTracksRaw = await fetchTracks(eliteParams);
 
   const eliteTracks = eliteTracksRaw
+    .filter((track) => !isLikelyArabic(track))
     .filter(
       (track) =>
         typeof track.duration === "number" &&
@@ -177,17 +197,39 @@ async function searchMixesByGenre(genre: string): Promise<MixResponseItem[]> {
       permalink_url: track.permalink_url,
     }));
 
-    // Рандомизация: выбираем случайный трек из первой десятки результатов.
-    if (eliteMixes.length > 1) {
-      const topCount = Math.min(10, eliteMixes.length);
-      const randomIndex = Math.floor(Math.random() * topCount);
-      if (randomIndex > 0) {
-        const [picked] = eliteMixes.splice(randomIndex, 1);
-        eliteMixes.unshift(picked);
-      }
-    }
+    // Короткие треки (1–10 мин) — миксы и треки одинаково по рандому
+    const shortParams = new URLSearchParams({
+      q: genre,
+      genres: genre,
+      "duration[from]": String(SHORT_TRACK_MIN_MS),
+      "duration[to]": String(SHORT_TRACK_MAX_MS),
+      limit: "30",
+      linked_partitioning: "1",
+    });
+    const shortTracksRaw = await fetchTracks(shortParams);
+    const shortTracks = shortTracksRaw
+      .filter((track) => !isLikelyArabic(track))
+      .filter(
+        (track) =>
+          typeof track.duration === "number" &&
+          track.duration >= SHORT_TRACK_MIN_MS &&
+          track.duration <= SHORT_TRACK_MAX_MS
+      );
+    const shortItems: MixResponseItem[] = shortTracks.map((track) => ({
+      id: track.id,
+      title: track.title,
+      user: { username: track.user?.username ?? "Unknown DJ" },
+      artwork_url: track.artwork_url ?? null,
+      duration: track.duration,
+      permalink_url: track.permalink_url,
+    }));
 
-    return eliteMixes;
+    const combined = [...eliteMixes, ...shortItems];
+    for (let i = combined.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [combined[i], combined[j]] = [combined[j], combined[i]];
+    }
+    return combined;
   }
 
   // ШАГ 2. Фоллбек: поиск 5–60 минут без ограничений по прослушиваниям.
@@ -200,12 +242,14 @@ async function searchMixesByGenre(genre: string): Promise<MixResponseItem[]> {
 
   const tracks = await fetchTracks(fallbackParams);
 
-  const longMixes = tracks.filter(
-    (track) =>
-      typeof track.duration === "number" &&
-      track.duration >= FALLBACK_MIN_DURATION_MS &&
-      track.duration <= FALLBACK_MAX_DURATION_MS
-  );
+  const longMixes = tracks
+    .filter((track) => !isLikelyArabic(track))
+    .filter(
+      (track) =>
+        typeof track.duration === "number" &&
+        track.duration >= FALLBACK_MIN_DURATION_MS &&
+        track.duration <= FALLBACK_MAX_DURATION_MS
+    );
 
   const mixes: MixResponseItem[] = longMixes.map((track) => ({
     id: track.id,
@@ -218,16 +262,42 @@ async function searchMixesByGenre(genre: string): Promise<MixResponseItem[]> {
     permalink_url: track.permalink_url,
   }));
 
-  if (mixes.length > 1) {
-    const topCount = Math.min(10, mixes.length);
-    const randomIndex = Math.floor(Math.random() * topCount);
-    if (randomIndex > 0) {
-      const [randomTrack] = mixes.splice(randomIndex, 1);
-      mixes.unshift(randomTrack);
-    }
-  }
+  // Короткие треки (1–10 мин) — чтобы миксы и треки были одинаково по рандому
+  const shortParams = new URLSearchParams({
+    q: genre,
+    genres: genre,
+    "duration[from]": String(SHORT_TRACK_MIN_MS),
+    "duration[to]": String(SHORT_TRACK_MAX_MS),
+    limit: "30",
+    linked_partitioning: "1",
+  });
+  const shortTracksRaw = await fetchTracks(shortParams);
+  const shortTracks = shortTracksRaw
+    .filter((track) => !isLikelyArabic(track))
+    .filter(
+      (track) =>
+        typeof track.duration === "number" &&
+        track.duration >= SHORT_TRACK_MIN_MS &&
+        track.duration <= SHORT_TRACK_MAX_MS
+    );
+  const shortItems: MixResponseItem[] = shortTracks.map((track) => ({
+    id: track.id,
+    title: track.title,
+    user: { username: track.user?.username ?? "Unknown DJ" },
+    artwork_url: track.artwork_url ?? null,
+    duration: track.duration,
+    permalink_url: track.permalink_url,
+  }));
 
-  return mixes;
+  const combined = [...mixes, ...shortItems];
+  if (combined.length === 0) return mixes;
+
+  // Перемешиваем: миксы и треки с равной вероятностью
+  for (let i = combined.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [combined[i], combined[j]] = [combined[j], combined[i]];
+  }
+  return combined;
 }
 
 export async function GET(request: NextRequest) {

@@ -58,6 +58,26 @@ let cachedToken: {
   expiresAt: number; // ms timestamp
 } | null = null;
 
+// Короткие треки (1–10 мин) — миксы и треки одинаково по рандому
+const SHORT_TRACK_MIN_MS = 1 * 60 * 1000;
+const SHORT_TRACK_MAX_MS = 10 * 60 * 1000;
+
+// Исключаем арабские/ближневосточные треки
+const ARABIC_SCRIPT_REGEX = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]/;
+const ARABIC_KEYWORDS = [
+  "arabic", "arab", "middle east", "turkish", "egyptian", "moroccan",
+  "lebanese", "syrian", "iraqi", "saudi", "uae", "dubai", "oriental",
+  "عربي", "موسيقى", "تركي", "مصري", "لبناني", "سوري",
+];
+
+function isLikelyArabic(track: SoundCloudTrack): boolean {
+  const title = (track.title ?? "").toLowerCase();
+  const username = (track.user?.username ?? "").toLowerCase();
+  const text = `${title} ${username}`;
+  if (ARABIC_SCRIPT_REGEX.test(text)) return true;
+  return ARABIC_KEYWORDS.some((kw) => text.includes(kw.toLowerCase()));
+}
+
 async function getAccessToken(): Promise<string> {
   const clientId = process.env.NEXT_PUBLIC_SOUNDCLOUD_CLIENT_ID;
   const clientSecret = process.env.SOUNDCLOUD_CLIENT_SECRET;
@@ -148,16 +168,18 @@ async function searchCuratedMixes(
     }
   }
 
-  // Фильтр по длительности и популярности для Шага 1.
-  const eliteTracks = allTracks.filter((track) => {
-    const hasDuration =
-      typeof track.duration === "number" &&
-      track.duration >= eliteMinMinutes * 60_000 &&
-      track.duration <= eliteMaxMinutes * 60_000;
-    const plays =
-      typeof track.playback_count === "number" ? track.playback_count : 0;
-    return hasDuration && plays >= 3000;
-  });
+  // Фильтр по длительности и популярности для Шага 1; исключаем арабский контент
+  const eliteTracks = allTracks
+    .filter((track) => !isLikelyArabic(track))
+    .filter((track) => {
+      const hasDuration =
+        typeof track.duration === "number" &&
+        track.duration >= eliteMinMinutes * 60_000 &&
+        track.duration <= eliteMaxMinutes * 60_000;
+      const plays =
+        typeof track.playback_count === "number" ? track.playback_count : 0;
+      return hasDuration && plays >= 3000;
+    });
 
   let selectedTracks: SoundCloudTrack[] = [];
 
@@ -200,13 +222,15 @@ async function searchCuratedMixes(
         continue;
       }
 
-      const filtered = (rawTracks as SoundCloudTrack[]).filter((track) => {
-        return (
-          typeof track.duration === "number" &&
-          track.duration >= baseMinMinutes * 60_000 &&
-          track.duration <= baseMaxMinutes * 60_000
-        );
-      });
+      const filtered = (rawTracks as SoundCloudTrack[])
+        .filter((track) => !isLikelyArabic(track))
+        .filter((track) => {
+          return (
+            typeof track.duration === "number" &&
+            track.duration >= baseMinMinutes * 60_000 &&
+            track.duration <= baseMaxMinutes * 60_000
+          );
+        });
 
       if (filtered.length > 0) {
         selectedTracks = filtered;
@@ -243,6 +267,59 @@ async function searchCuratedMixes(
   return mixes;
 }
 
+/** Короткие треки (1–10 мин) по тому же запросу — миксы и треки одинаково по рандому */
+async function fetchShortTracks(
+  searchTerm: string,
+  alternativeQueries?: string[]
+): Promise<MixResponseItem[]> {
+  const accessToken = await getAccessToken();
+  const queriesToTry = [searchTerm, ...(alternativeQueries ?? [])];
+
+  for (const query of queriesToTry) {
+    const params = new URLSearchParams({
+      q: query,
+      "duration[from]": String(SHORT_TRACK_MIN_MS),
+      "duration[to]": String(SHORT_TRACK_MAX_MS),
+      limit: "30",
+      linked_partitioning: "1",
+    });
+    const response = await fetch(
+      `${SOUNDCLOUD_API_BASE}/tracks?${params.toString()}`,
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: "application/json",
+        },
+        cache: "no-store",
+      }
+    );
+    if (!response.ok) continue;
+    const data = (await response.json()) as unknown;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rawTracks = (data as any)?.collection ?? [];
+    if (!Array.isArray(rawTracks)) continue;
+    const filtered = (rawTracks as SoundCloudTrack[])
+      .filter((track) => !isLikelyArabic(track))
+      .filter(
+        (track) =>
+          typeof track.duration === "number" &&
+          track.duration >= SHORT_TRACK_MIN_MS &&
+          track.duration <= SHORT_TRACK_MAX_MS
+      );
+    if (filtered.length === 0) continue;
+    const items: MixResponseItem[] = filtered.map((track) => ({
+      id: track.id,
+      title: track.title,
+      user: { username: track.user?.username ?? "Unknown DJ" },
+      artwork_url: track.artwork_url ?? null,
+      duration: track.duration,
+      permalink_url: track.permalink_url,
+    }));
+    return items;
+  }
+  return [];
+}
+
 const replicate = new Replicate({ auth: process.env.REPLICATE_API_TOKEN });
 
 async function generateSearchQueries(
@@ -258,8 +335,9 @@ Example: "aggressive workout phonk"
 Requirements:
 - Each keyword should be 2-4 words
 - Focus on energetic, popular mixes
+- Do NOT suggest Arabic, Middle Eastern, Turkish, or Oriental music
 - Output format: keyword1, keyword2, keyword3, keyword4`,
-      prompt: `User mood: ${moodInput}. Generate 3-4 English search keywords for SoundCloud to find long music mixes. Example: 'aggressive workout phonk'. Output only keywords.`,
+      prompt: `User mood: ${moodInput}. Generate 3-4 English search keywords for SoundCloud (no Arabic/Middle Eastern/Turkish). Example: 'aggressive workout phonk'. Output only keywords.`,
     };
 
     const output = await replicate.run("openai/gpt-4.1-mini", { input });
@@ -325,13 +403,14 @@ Requirements:
 - "search_term": short, meaningful search query for SoundCloud in English (e.g., "hard techno gym mix")
 - "min_duration": number of minutes, between 5 and 60
 - "max_duration": number of minutes, between min_duration and 60
+- Do NOT suggest Arabic, Middle Eastern, Turkish, or Oriental music in search_term
 
 Your task is to find only highly-rated and popular mixes.
 Prioritize queries in format:
 - "<genre> popular essential mixes"
 - "<genre> best live sets"
 - "<genre> classic essential mix"
-where <genre> is the mood/genre extracted from user text.
+where <genre> is the mood/genre extracted from user text (Western/English genres only).
 
 Add keywords that help find quality, frequently played sets:
 e.g., "popular essential mix", "best live set", "all time best", "most played".
@@ -442,16 +521,17 @@ export async function POST(request: NextRequest) {
       };
     }
 
-    // ШАГ 3: Waterfall-поиск с использованием основного query и альтернативных.
+    // ШАГ 3: миксы (длинные) + короткие треки — одинаково по рандому
     const alternativeQueries = searchQueries.slice(1);
-    const mixes = await searchCuratedMixes(
+    const longMixes = await searchCuratedMixes(
       primaryQuery,
       ai.min_duration,
       ai.max_duration,
       alternativeQueries
     );
-
-    if (!mixes.length) {
+    const shortItems = await fetchShortTracks(primaryQuery, alternativeQueries);
+    const combined = [...longMixes, ...shortItems];
+    if (combined.length === 0) {
       return NextResponse.json(
         {
           error: "НИЧЕГО НЕ НАЙДЕНО, ПОПРОБУЙ ДРУГОЙ ВАЙБ",
@@ -459,6 +539,11 @@ export async function POST(request: NextRequest) {
         },
         { status: 404 }
       );
+    }
+    // Перемешиваем: миксы и треки с равной вероятностью
+    for (let i = combined.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [combined[i], combined[j]] = [combined[j], combined[i]];
     }
 
     const responseAi: AiCuratorResponse = {
@@ -471,7 +556,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(
       {
-        mixes,
+        mixes: combined,
         ai: responseAi,
       },
       {
